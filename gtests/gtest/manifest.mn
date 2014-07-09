@@ -2,12 +2,19 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-CORE_DEPTH = .
-DEPTH      = .
+CORE_DEPTH = ../..
 
-IMPORTS =	nspr20/v4.8 \
-		$(NULL)
+EXPORTS = \
+	$(NULL)
 
-RELEASE = nss
+MODULE = gtest
 
-DIRS = coreconf lib cmd gtests
+CPPSRCS = \
+	gtest/src/gtest-all.cc \
+	$(NULL)
+
+INCLUDES += -Igtest/include/ -Igtest
+
+LIBRARY_NAME = gtest
+LIBRARY_VERSION = 1
+
