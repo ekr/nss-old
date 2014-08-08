@@ -305,24 +305,18 @@ class TlsAgent : public PollTarget {
       CERT_DestroyCertificate(cert);
     }
 
-    // Current TLS ranges.
-    SSLVersionRange version_range = {
-      SSL_LIBRARY_VERSION_TLS_1_0,
-      SSL_LIBRARY_VERSION_TLS_1_2
-    };
-
-    SECStatus rv = SSL_VersionRangeSet(ssl_fd_, &version_range);
-    EXPECT_EQ(SECSuccess, rv);
-    if (rv != SECSuccess)
-      return false;
-
-    rv = SSL_AuthCertificateHook(ssl_fd_, AuthCertificateHook,
+    SECStatus rv = SSL_AuthCertificateHook(ssl_fd_, AuthCertificateHook,
                                  reinterpret_cast<void *>(this));
     EXPECT_EQ(SECSuccess, rv);
     if (rv != SECSuccess)
       return false;
 
     return true;
+  }
+
+  void SetVersionRange(uint16_t minver, uint16_t maxver) {
+    SSLVersionRange range = {minver, maxver};
+    ASSERT_EQ(SECSuccess, SSL_VersionRangeSet(ssl_fd_, &range));
   }
 
   State state() const { return state_; }
@@ -336,6 +330,16 @@ class TlsAgent : public PollTarget {
   }
 
   PRFileDesc* ssl_fd() { return ssl_fd_; }
+
+  bool version(uint16_t* version) const {
+    if (state_ != CONNECTED)
+      return false;
+
+    *version = info_.protocolVersion;
+
+    return true;
+  }
+
 
   bool cipher_suite(int16_t* cipher_suite) const {
     if (state_ != CONNECTED)
@@ -355,6 +359,11 @@ class TlsAgent : public PollTarget {
   void CheckKEAType(SSLKEAType type) const {
     ASSERT_EQ(CONNECTED, state_);
     ASSERT_EQ(type, csinfo_.keaType);
+  }
+
+  void CheckVersion(uint16_t version) const {
+    ASSERT_EQ(CONNECTED, state_);
+    ASSERT_EQ(version, info_.protocolVersion);
   }
 
   void Handshake() {
@@ -470,6 +479,11 @@ class TlsConnectTest : public ::testing::Test {
     Init();
   }
 
+  void EnsureTlsSetup() {
+    ASSERT_TRUE(client_->EnsureTlsSetup());
+    ASSERT_TRUE(server_->EnsureTlsSetup());
+  }
+
   void Connect() {
     server_->StartConnect(); // Server
     client_->StartConnect(); // Client
@@ -509,6 +523,34 @@ TEST_F(TlsConnectTest, SetupOnly)
 TEST_F(TlsConnectTest, Connect)
 {
   Connect();
+
+  // Check that we negotiated TLS 1.0 as expected.
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_0);
+}
+
+TEST_F(TlsConnectTest, ConnectTLS_1_1_Only)
+{
+  EnsureTlsSetup();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
+                           SSL_LIBRARY_VERSION_TLS_1_1);
+
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
+                           SSL_LIBRARY_VERSION_TLS_1_1);
+
+  Connect();
+
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_1);
+}
+
+TEST_F(TlsConnectTest, ConnectTLS_1_2_Only)
+{
+  EnsureTlsSetup();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
+                           SSL_LIBRARY_VERSION_TLS_1_2);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
+                           SSL_LIBRARY_VERSION_TLS_1_2);
+  Connect();
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
 }
 
 TEST_F(TlsConnectTest, ConnectECDHE)
