@@ -589,6 +589,17 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only)
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
 }
 
+TEST_F(TlsConnectTest, ConnectTLS_1_3_Only)
+{
+  EnsureTlsSetup();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  Connect();
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+}
+
 TEST_F(TlsConnectTest, ConnectECDHE)
 {
   EnableSomeECDHECiphers();
