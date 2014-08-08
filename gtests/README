@@ -1,0 +1,67 @@
+WARNING: THIS IS WIP
+
+
+GTest-based Unit Tests
+
+This directory contains GTest-based unit tests for NSS.
+
+Currently, these are only loopback-type tests of libsssl,
+but could be expanded to other types of tests. To make these
+work do:
+
+- In gtest/gtest do:
+  svn co https://googletest.googlecode.com/svn/trunk gtest
+
+- Make a certdb without a PIN somewhere, e.g., data/. This
+  needs to have a trust anchor and a key named "server".
+
+At that point you should be able to run the unit tests as:
+
+  ssl_unittests -d ROOT/gtests/data
+
+Modulo the usual NSS shared library path issues.
+
+There is a very trivial set of tests that demonstrate some
+of the features.
+
+
+TODO LIST (PRE NSS LANDING)
+1. Fix the Makefile setup so it's clean as opposed to hacked
+   up. This includes:
+
+   * Fixing up my weird rules.mk hacks.
+   * Making gtest conditionally compile or auto-download.
+
+2. Make a reasonable sample cert DB.
+
+3. Go over the code and clean things up.
+
+4. Get code reviewed.
+
+
+TODO LIST (POST NSS LANDING)
+1. Get integrated into NSS CI.
+
+2. Add support for DTLS
+
+3. Expanded TLS happy-path tests. Starting list:
+   - Version negotiation
+   - Cipher suite negotiation
+   - All the extensions.
+
+4. DTLS network stability cases
+   - Packet loss
+   - Reordering
+   - MTU throttling
+
+5. Sad path cases.
+
+
+
+
+
+
+
+
+
+
