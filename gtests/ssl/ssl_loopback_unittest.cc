@@ -124,29 +124,29 @@ class TlsInspectorRecordHandshakeMessage : public TlsRecordInspector {
         return;
       }
 
-#if 0
-      // DTLS
-      uint32_t message_seq;
-      if (!parser.Read(&message_seq, 2)) {
-        return;
-      }
+      if (adapter->mode() == DGRAM) {
+        // DTLS
+        uint32_t message_seq;
+        if (!parser.Read(&message_seq, 2)) {
+          return;
+        }
 
-      uint32_t fragment_offset;
-      if (!parser.Read(&fragment_offset, 3)) {
-        return;
-      }
+        uint32_t fragment_offset;
+        if (!parser.Read(&fragment_offset, 3)) {
+          return;
+        }
 
-      uint32_t fragment_length;
-      if (!parser.Read(&fragment_length, 3)) {
-        return;
-      }
+        uint32_t fragment_length;
+        if (!parser.Read(&fragment_length, 3)) {
+          return;
+        }
 
-      if ((fragment_offset != 0) || (fragment_length != length)) {
-        // This shouldn't happen because all current tests where we
-        // are using this code don't fragment.
-        return;
+        if ((fragment_offset != 0) || (fragment_length != length)) {
+          // This shouldn't happen because all current tests where we
+          // are using this code don't fragment.
+          return;
+        }
       }
-#endif
 
       unsigned char *dest = nullptr;
 
@@ -212,8 +212,9 @@ class TlsAgent : public PollTarget {
   enum Role { CLIENT, SERVER};
   enum State { INIT, CONNECTING, CONNECTED, ERROR };
 
-  TlsAgent(const std::string& name, Role role) :
+  TlsAgent(const std::string& name, Role role, Mode mode) :
       name_(name),
+      mode_(mode),
       pr_fd_(nullptr),
       adapter_(nullptr),
       ssl_fd_(nullptr),
@@ -231,7 +232,7 @@ class TlsAgent : public PollTarget {
   }
 
   bool Init() {
-    pr_fd_ = DummyPrSocket::CreateFD(name_);
+    pr_fd_ = DummyPrSocket::CreateFD(name_, mode_);
     if (!pr_fd_)
       return false;
 
@@ -278,7 +279,11 @@ class TlsAgent : public PollTarget {
     if (ssl_fd_)
       return true;
 
-    ssl_fd_ = SSL_ImportFD(nullptr, pr_fd_);
+    if (adapter_->mode() == STREAM) {
+      ssl_fd_ = SSL_ImportFD(nullptr, pr_fd_);
+    } else {
+      ssl_fd_ = DTLS_ImportFD(nullptr, pr_fd_);
+    }
 
     EXPECT_NE(nullptr, ssl_fd_);
     if (!ssl_fd_)
@@ -432,6 +437,7 @@ class TlsAgent : public PollTarget {
   }
 
   const std::string name_;
+  Mode mode_;
   PRFileDesc* pr_fd_;
   DummyPrSocket* adapter_;
   PRFileDesc* ssl_fd_;
@@ -449,13 +455,14 @@ const char *TlsAgent::states[] =
   "ERROR"
 };
 
-class TlsConnectTest : public ::testing::Test {
+class TlsConnectTestBase : public ::testing::Test {
  public:
-  TlsConnectTest() :
-      client_(new TlsAgent("client", TlsAgent::CLIENT)),
-      server_(new TlsAgent("server", TlsAgent::SERVER)) {}
+  TlsConnectTestBase(Mode mode) :
+      mode_(mode),
+      client_(new TlsAgent("client", TlsAgent::CLIENT, mode_)),
+      server_(new TlsAgent("server", TlsAgent::SERVER, mode_)) {}
 
-  ~TlsConnectTest() {
+  ~TlsConnectTestBase() {
     delete client_;
     delete server_;
   }
@@ -473,8 +480,11 @@ class TlsConnectTest : public ::testing::Test {
   }
 
   void Reset() {
-    client_ = new TlsAgent("client", TlsAgent::CLIENT);
-    server_ = new TlsAgent("server", TlsAgent::SERVER);
+    delete client_;
+    delete server_;
+
+    client_ = new TlsAgent("client", TlsAgent::CLIENT, mode_);
+    server_ = new TlsAgent("server", TlsAgent::SERVER, mode_);
 
     Init();
   }
@@ -489,7 +499,7 @@ class TlsConnectTest : public ::testing::Test {
     client_->StartConnect(); // Client
     client_->Handshake();
     server_->Handshake();
-    
+
     ASSERT_TRUE_WAIT(client_->state() != TlsAgent::CONNECTING &&
                      server_->state() != TlsAgent::CONNECTING, 5000);
     ASSERT_EQ(TlsAgent::CONNECTED, server_->state());
@@ -511,24 +521,50 @@ class TlsConnectTest : public ::testing::Test {
   }
 
  protected:
+  Mode mode_;
   TlsAgent* client_;
   TlsAgent* server_;
 };
 
+class TlsConnectTest : public TlsConnectTestBase {
+ public:
+  TlsConnectTest() :
+      TlsConnectTestBase(STREAM) {}
+};
 
-TEST_F(TlsConnectTest, SetupOnly)
+
+class DtlsConnectTest : public TlsConnectTestBase {
+ public:
+  DtlsConnectTest() :
+      TlsConnectTestBase(DGRAM) {}
+};
+
+class TlsConnectGeneric : public TlsConnectTestBase,
+                 public ::testing::WithParamInterface<std::string> {
+ public:
+  TlsConnectGeneric()
+      : TlsConnectTestBase((GetParam() == "TLS") ? STREAM : DGRAM) {
+    std::cerr << "Variant: " << GetParam() << std::endl;
+  }
+};
+
+TEST_P(TlsConnectGeneric, SetupOnly)
 {
 }
 
-TEST_F(TlsConnectTest, Connect)
+TEST_P(TlsConnectGeneric, Connect)
 {
   Connect();
 
-  // Check that we negotiated TLS 1.0 as expected.
-  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_0);
+  // Check that we negotiated the expected version.
+  if (mode_ == STREAM) {
+    client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_0);
+  } else {
+    client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_1);
+  }
 }
 
-TEST_F(TlsConnectTest, ConnectTLS_1_1_Only)
+TEST_P(TlsConnectGeneric, ConnectTLS_1_1_Only)
 {
   EnsureTlsSetup();
   client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
@@ -542,7 +578,7 @@ TEST_F(TlsConnectTest, ConnectTLS_1_1_Only)
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_1);
 }
 
-TEST_F(TlsConnectTest, ConnectTLS_1_2_Only)
+TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only)
 {
   EnsureTlsSetup();
   client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
@@ -625,6 +661,8 @@ TEST_F(TlsConnectTest, ConnectECDHETwiceNewKey)
                         dhe1.public_key_.len())));
 }
 
+INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
+                        ::testing::Values("TLS", "DTLS"));
 
 }  // namespace nspr_test
 

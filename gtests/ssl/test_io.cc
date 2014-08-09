@@ -135,15 +135,21 @@ static PRStatus DummyShutdown(PRFileDesc *f, int32_t how) {
 }
 
 // This function does not support peek.
-static int32_t DummyRecv(PRFileDesc *f, void *buf, int32_t amount,
-                                  int32_t flags, PRIntervalTime to) {
+static int32_t DummyRecv(PRFileDesc *f, void *buf, int32_t buflen,
+                         int32_t flags, PRIntervalTime to) {
   PR_ASSERT(flags == 0);
   if (flags != 0) {
     PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
     return -1;
   }
 
-  return DummyRead(f, buf, amount);
+  DummyPrSocket *io = reinterpret_cast<DummyPrSocket *>(f->secret);
+
+  if (io->mode() == DGRAM) {
+    return io->Recv(buf, buflen);
+  } else {
+    return io->Read(buf, buflen);
+  }
 }
 
 // Note: this is always nonblocking and assumes a zero timeout.
@@ -286,8 +292,7 @@ static const struct PRIOMethods DummyMethods = {
 };
 
 
-PRFileDesc* DummyPrSocket::CreateFD(const std::string& name) {
-
+PRFileDesc* DummyPrSocket::CreateFD(const std::string& name, Mode mode) {
   if (test_fd_identity == PR_INVALID_IO_LAYER) {
     test_fd_identity = PR_GetUniqueIdentity("testtransportadapter");
   }
@@ -295,7 +300,7 @@ PRFileDesc* DummyPrSocket::CreateFD(const std::string& name) {
   PRFileDesc* fd = (PR_CreateIOLayerStub(test_fd_identity,
                                          &DummyMethods));
   fd->secret = reinterpret_cast<PRFilePrivate*>(
-      new DummyPrSocket(name));
+      new DummyPrSocket(name, mode));
 
   return fd;
 }
@@ -310,6 +315,13 @@ void DummyPrSocket::PacketReceived(const void *data, int32_t len) {
 }
 
 int32_t DummyPrSocket::Read(void *data, int32_t len) {
+  PR_ASSERT(mode_ == STREAM);
+
+  if (mode_ != STREAM) {
+    PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+    return -1;
+  }
+
   if (input_.empty()) {
     LOG("Read --> wouldblock " << len);
     PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
@@ -328,6 +340,29 @@ int32_t DummyPrSocket::Read(void *data, int32_t len) {
 
   return to_read;
 }
+
+int32_t DummyPrSocket::Recv(void *buf, int32_t buflen) {
+  if (input_.empty()) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+
+  Packet* front = input_.front();
+  if (buflen < front->len_) {
+    PR_ASSERT(false);
+    PR_SetError(PR_BUFFER_OVERFLOW_ERROR, 0);
+    return -1;
+  }
+
+  int32_t count = front->len_;
+  memcpy(buf, front->data_, count);
+
+  input_.pop();
+  delete front;
+
+  return count;
+}
+
 
 int32_t DummyPrSocket::Write(const void *buf, int32_t length) {
   if (inspector_) {
