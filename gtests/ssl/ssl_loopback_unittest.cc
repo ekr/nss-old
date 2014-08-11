@@ -610,6 +610,8 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only)
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
 }
 
+#ifdef SSL_LIBRARY_VERSION_TLS_1_3
+
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_Only)
 {
   EnsureTlsSetup();
@@ -646,7 +648,7 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnlyMismatch)
   ConnectExpectFail(SSL_ERROR_NO_CYPHER_OVERLAP,
                     SSL_ERROR_NO_CYPHER_OVERLAP);
 }
-
+#endif
 
 TEST_F(TlsConnectTest, ConnectECDHE)
 {
