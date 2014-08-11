@@ -215,7 +215,11 @@ compressionEnabled(sslSocket *ss, SSLCompressionMethod compression)
 	return PR_TRUE;  /* Always enabled */
 #ifdef NSS_ENABLE_ZLIB
     case ssl_compression_deflate:
-	return ss->opt.enableDeflate;
+        if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+            return ss->opt.enableDeflate;
+        } else {
+            return PR_FALSE;
+        }
 #endif
     default:
 	return PR_FALSE;
@@ -7717,6 +7721,12 @@ ssl3_HandleClientHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	goto loser;		/* malformed */
     }
 
+    /* TLS 1.3 requires that compression be empty */
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3_DRAFT_VERSION) {
+        if (comps.len != 1 || comps.data[0]) {
+            goto loser;
+        }
+    }
     desc = handshake_failure;
 
     /* Handle TLS hello extensions for SSL3 & TLS. We do not know if
