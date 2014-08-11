@@ -634,6 +634,19 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnly)
   Connect();
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_3);
 }
+
+TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnlyMismatch)
+{
+  EnsureTlsSetup();
+  // Only enable ECDHE on server.
+  server_->EnableSomeECDHECiphers();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  ConnectExpectFail(SSL_ERROR_NO_CYPHER_OVERLAP,
+                    SSL_ERROR_NO_CYPHER_OVERLAP);
+}
 #endif
 
 TEST_F(TlsConnectTest, ConnectECDHE)
