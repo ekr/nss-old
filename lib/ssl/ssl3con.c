@@ -641,14 +641,16 @@ ssl3_CipherSuiteAllowedForVersionRange(
     case TLS_DHE_RSA_WITH_AES_256_CBC_SHA256:
     case TLS_RSA_WITH_AES_256_CBC_SHA256:
     case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:
-    case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
     case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256:
-    case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
     case TLS_DHE_RSA_WITH_AES_128_CBC_SHA256:
-    case TLS_DHE_RSA_WITH_AES_128_GCM_SHA256:
     case TLS_RSA_WITH_AES_128_CBC_SHA256:
     case TLS_RSA_WITH_AES_128_GCM_SHA256:
     case TLS_RSA_WITH_NULL_SHA256:
+	return vrange->max == SSL_LIBRARY_VERSION_TLS_1_2;
+
+    case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+    case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+    case TLS_DHE_RSA_WITH_AES_128_GCM_SHA256:
 	return vrange->max >= SSL_LIBRARY_VERSION_TLS_1_2;
 
     /* RFC 4492: ECC cipher suites need TLS extensions to negotiate curves and
@@ -673,10 +675,11 @@ ssl3_CipherSuiteAllowedForVersionRange(
     case TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA:
     case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
     case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
-	return vrange->max >= SSL_LIBRARY_VERSION_TLS_1_0;
+	return vrange->max >= SSL_LIBRARY_VERSION_TLS_1_0 &&
+               vrange->min < SSL_LIBRARY_VERSION_TLS_1_3;
 
     default:
-	return PR_TRUE;
+        return vrange->min < SSL_LIBRARY_VERSION_TLS_1_3;
     }
 }
 
