@@ -217,9 +217,8 @@ compressionEnabled(sslSocket *ss, SSLCompressionMethod compression)
     case ssl_compression_deflate:
         if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
             return ss->opt.enableDeflate;
-        } else {
-            return PR_FALSE;
         }
+        return PR_FALSE;
 #endif
     default:
 	return PR_FALSE;
@@ -7725,8 +7724,8 @@ ssl3_HandleClientHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     }
 
     /* TLS 1.3 requires that compression be empty */
-    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3_DRAFT_VERSION) {
-        if (comps.len != 1 || comps.data[0]) {
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+        if (comps.len != 1 || (comps.data[0] != ssl_compression_null)) {
             goto loser;
         }
     }
