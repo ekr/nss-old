@@ -194,11 +194,12 @@ typedef enum {
     ssl_padding_xtn                  = 21,
     ssl_extended_master_secret_xtn   = 23,
     ssl_session_ticket_xtn           = 35,
+    ssl_early_hs_msg_xtn             = 40,      /* unofficial TODO(ekr@rtfm.com) */
     ssl_next_proto_nego_xtn          = 13172,
     ssl_renegotiation_info_xtn       = 0xff01,
     ssl_tls13_draft_version_xtn      = 0xff02   /* experimental number */
 } SSLExtensionType;
 
-#define SSL_MAX_EXTENSIONS             12 /* doesn't include ssl_padding_xtn. */
+#define SSL_MAX_EXTENSIONS             13 /* doesn't include ssl_padding_xtn. */
 
 #endif /* __sslt_h_ */

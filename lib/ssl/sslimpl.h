@@ -933,6 +933,11 @@ const ssl3CipherSuiteDef *suite_def;
     PRUint32              rtTimeoutMs;     /* The length of the current timeout
 					    * used for backoff (in ms) */
     PRUint32              rtRetries;       /* The retry counter */
+
+    /* These values are used for TLS 1.3 and later */
+    PRBool                divertHs;
+    PRCList               earlyMessages;   /* Early handshake messages */
+    sslBuffer             earlyHsBuf ;     /* Holding buffer */
 } SSL3HandshakeState;
 
 
@@ -1060,7 +1065,6 @@ typedef struct SessionTicketStr {
 struct sslConnectInfoStr {
     /* outgoing handshakes appended to this. */
     sslBuffer       sendBuf;	                /*xmitBufLock*/ /* ssl 2 & 3 */
-
     PRIPv6Addr      peer;                                       /* ssl 2 & 3 */
     unsigned short  port;                                       /* ssl 2 & 3 */
 
@@ -1661,7 +1665,6 @@ extern SECStatus ssl3_ECName2Params(PLArenaPool *arena, ECName curve,
 				   SECKEYECParams *params);
 ECName	ssl3_GetCurveWithECKeyStrength(PRUint32 curvemsk, int requiredECCbits);
 
-
 #endif /* NSS_DISABLE_ECC */
 
 extern SECStatus ssl3_CipherPrefSetDefault(ssl3CipherSuite which, PRBool on);
@@ -1709,6 +1712,9 @@ extern SECStatus ssl3_HandleECDHClientKeyExchange(sslSocket *ss,
                                      SECKEYPrivateKey *srvrPrivKey);
 extern SECStatus ssl3_SendECDHServerKeyExchange(sslSocket *ss,
 			const SSL3SignatureAndHashAlgorithm *sigAndHash);
+extern SECStatus tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve,
+  PRUint32* length);
+extern SECStatus tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve);
 #endif
 
 extern SECStatus ssl3_ComputeCommonKeyHash(SECOidTag hashAlg,

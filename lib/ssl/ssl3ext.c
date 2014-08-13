@@ -81,6 +81,10 @@ static PRInt32 ssl3_ClientSendSigAlgsXtn(sslSocket *ss, PRBool append,
                                          PRUint32 maxBytes);
 static SECStatus ssl3_ServerHandleSigAlgsXtn(sslSocket *ss, PRUint16 ex_type,
                                              SECItem *data);
+static SECStatus ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
+						  PRUint32 maxBytes);
+static SECStatus ssl3_ServerHandleEarlyHandshakeXtn(sslSocket *ss, PRUint16 ex_type,
+                                                     SECItem *data);
 
 static PRInt32 ssl3_ClientSendDraftVersionXtn(sslSocket *ss, PRBool append,
                                               PRUint32 maxBytes);
@@ -257,6 +261,7 @@ static const ssl3HelloExtensionHandler clientHelloHandlers[] = {
     { ssl_signature_algorithms_xtn, &ssl3_ServerHandleSigAlgsXtn },
     { ssl_tls13_draft_version_xtn, &ssl3_ServerHandleDraftVersionXtn },
     { ssl_extended_master_secret_xtn,       &ssl3_HandleExtendedMasterSecretXtn },
+    { ssl_early_hs_msg_xtn,       &ssl3_ServerHandleEarlyHandshakeXtn },
     { -1, NULL }
 };
 
@@ -302,6 +307,7 @@ ssl3HelloExtensionSender clientHelloSendersTLS[SSL_MAX_EXTENSIONS] = {
     { ssl_signature_algorithms_xtn, &ssl3_ClientSendSigAlgsXtn },
     { ssl_tls13_draft_version_xtn, &ssl3_ClientSendDraftVersionXtn },
     { ssl_extended_master_secret_xtn,       &ssl3_SendExtendedMasterSecretXtn},
+    { ssl_early_hs_msg_xtn,       &ssl3_ClientSendEarlyHandshakeXtn },
     /* any extra entries will appear as { 0, NULL }    */
 };
 
@@ -2544,7 +2550,6 @@ loser:
     return SECSuccess;
 }
 
-
 static PRInt32
 ssl3_SendExtendedMasterSecretXtn(sslSocket * ss, PRBool append, PRUint32 maxBytes)
 {
@@ -2610,4 +2615,78 @@ ssl3_HandleExtendedMasterSecretXtn(sslSocket * ss, PRUint16 ex_type,
             ss, ex_type, ssl3_SendExtendedMasterSecretXtn);
     }
     return SECSuccess;
+}
+
+/* Sends early handshake messages for TLS 1.3 */
+static PRInt32
+ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
+                                 PRUint32 maxBytes)
+{
+    PRInt32 extension_length;
+    SECStatus rv;
+
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+        return 0;
+    }
+
+    if (!ss->ssl3.hs.earlyHsBuf.len)
+        return 0;
+
+    extension_length = 2 + 2 +
+            ss->ssl3.hs.earlyHsBuf.len;
+
+    if (append && maxBytes >= extension_length) {
+        rv = ssl3_AppendHandshakeNumber(ss, ssl_early_hs_msg_xtn, 2);
+        if (rv != SECSuccess)
+            return -1;
+
+        rv = ssl3_AppendHandshakeVariable(ss,
+                                          ss->ssl3.hs.earlyHsBuf.buf,
+                                          ss->ssl3.hs.earlyHsBuf.len,
+                                          2);
+        if (rv != SECSuccess)
+            return -1;
+    } else if (maxBytes < extension_length) {
+        PORT_Assert(0);
+        return 0;
+    }
+
+    return extension_length;
+}
+
+
+/* Handle the early handshake extension for TLS 1.3 */
+static SECStatus
+ssl3_ServerHandleEarlyHandshakeXtn(sslSocket * ss, PRUint16 ex_type, SECItem *data)
+{
+    /* Ignore this extension if we aren't doing TLS 1.3 or greater. */
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+        return SECSuccess;
+    }
+
+    /* Ignore this if we're not a server.
+
+       TODO(ekr@rtfm.com): Generate an error.
+    */
+    if (!ss->sec.isServer) {
+        return SECSuccess;
+    }
+
+    /* Keep track of negotiated extensions. */
+    ss->xtnData.negotiated[ss->xtnData.numNegotiated++] = ex_type;
+
+    /* What remains is a series of handshake messages. We need to stash
+       this in the earlyHsBuf and then process at the end of the
+       ClientHello processing. */
+    PORT_Assert(!ss->ssl3.hs.earlyHsBuf.len);  /* This must be empty */
+    int err = sslBuffer_Grow(&ss->ssl3.hs.earlyHsBuf, data->len);
+    if (err)
+        goto loser;
+
+    PORT_Memcpy(ss->ssl3.hs.earlyHsBuf.buf, data->data, data->len);
+    ss->ssl3.hs.earlyHsBuf.len = data->len;
+    return SECSuccess;
+
+loser:
+    return SECFailure;
 }

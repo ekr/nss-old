@@ -49,6 +49,8 @@
 
 
 static SECStatus ssl3_CreateECDHEphemeralKeys(sslSocket *ss, ECName ec_curve);
+static SECStatus ssl3_CreateECDHEphemeralKeyPair(ECName ec_curve,
+                                                 ssl3KeyPair** keyPair);
 
 #define supportedCurve(x) (((x) > ec_noName) && ((x) < ec_pastLastName))
 
@@ -352,6 +354,81 @@ loser:
 }
 
 
+/*
+** Called from tls13_SendClientKeyShare()
+*/
+
+SECStatus
+tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss,
+                                           ECName ec_curve,
+                                           PRUint32 *length)
+{
+    SECStatus rv;
+
+    /* TODO(ekr@rtfm.com): Check that this is a valid curve */
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
+
+    /* This currently only allows us to generate a key for a single
+       group. TODO(ekr@rtfm.com)*/
+    PORT_Assert(!ss->ephemeralECDHKeyPair);
+
+    rv = ssl3_CreateECDHEphemeralKeyPair(ec_curve, &ss->ephemeralECDHKeyPair);
+    if (rv != SECSuccess)
+        return rv;
+
+    *length = 3 + /* Curve type */
+              1 + /* Point length */
+              ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len;
+
+    return SECSuccess;
+}
+
+SECStatus
+tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve)
+{
+    SECStatus rv;
+    ECName curve;
+    SECItem            ec_params = {siBuffer, NULL, 0};
+    unsigned char      paramBuf[3];
+    SECKEYPublicKey *  ecdhePub;
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
+
+    PORT_Assert(ss->ephemeralECDHKeyPair);
+    ecdhePub = ss->ephemeralECDHKeyPair->pubKey;
+    curve = params2ecName(&ecdhePub->u.ec.DEREncodedParams);
+
+    PORT_Assert( ec_curve == curve);
+
+    ec_params.len  = sizeof paramBuf;
+    ec_params.data = paramBuf;
+    if (curve != ec_noName) {
+        ec_params.data[0] = ec_type_named;
+        ec_params.data[1] = 0x00;
+        ec_params.data[2] = curve;
+    } else {
+        PORT_SetError(SEC_ERROR_UNSUPPORTED_ELLIPTIC_CURVE);
+        goto loser;
+    }
+
+    rv = ssl3_AppendHandshake(ss, ec_params.data, ec_params.len);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by AppendHandshake. */
+    }
+
+    rv = ssl3_AppendHandshakeVariable(ss, ecdhePub->u.ec.publicValue.data,
+                                      ecdhePub->u.ec.publicValue.len, 1);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by AppendHandshake. */
+    }
+
+    return SECSuccess;
+
+loser:
+    return SECFailure;
+}
 /*
 ** Called from ssl3_HandleClientKeyExchange()
 */

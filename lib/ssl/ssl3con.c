@@ -51,6 +51,8 @@ static SECStatus ssl3_HandshakeFailure(      sslSocket *ss);
 static SECStatus ssl3_InitState(             sslSocket *ss);
 static SECStatus ssl3_SendCertificate(       sslSocket *ss);
 static SECStatus ssl3_SendCertificateStatus( sslSocket *ss);
+static SECStatus tls_SendEarlyHandshakeData(sslSocket *ss);
+static SECStatus tls13_SendClientKeyShare(sslSocket *ss);
 static SECStatus ssl3_SendEmptyCertificate(  sslSocket *ss);
 static SECStatus ssl3_SendCertificateRequest(sslSocket *ss);
 static SECStatus ssl3_SendNextProto(         sslSocket *ss);
@@ -563,6 +565,8 @@ ssl3_DecodeHandshakeType(int msgType)
     case server_hello_done:	rv = "server_hello_done   (14)";        break;
     case certificate_verify:	rv = "certificate_verify  (15)";        break;
     case client_key_exchange:	rv = "client_key_exchange (16)";        break;
+    case client_key_share:	rv = "client_key_share (17)";           break;
+    case server_key_share:	rv = "server_key_share (18)";           break;
     case finished:	        rv = "finished     (20)";               break;
     default:
         sprintf(line, "*UNKNOWN* handshake type! (%d)", msgType);
@@ -3456,7 +3460,7 @@ ssl3_SendChangeCipherSpecs(sslSocket *ss)
 	    return (SECStatus)sent;	/* error code set by ssl3_SendRecord */
 	}
     } else {
-	rv = dtls_QueueMessage(ss, content_change_cipher_spec, &change, 1);
+        rv = dtls_QueueMessage(ss, content_change_cipher_spec, &change, 1);
 	if (rv != SECSuccess) {
 	    return rv;
 	}
@@ -4138,6 +4142,24 @@ ssl3_AppendHandshake(sslSocket *ss, const void *void_src, PRInt32 bytes)
 
     if (!bytes)
     	return SECSuccess;
+
+    if (ss->ssl3.hs.divertHs) {
+      /* If we are in divert mode, just append whatever it is to
+         the buffer so we can stuff it into an extension. */
+      room = ss->ssl3.hs.earlyHsBuf.space - ss->ssl3.hs.earlyHsBuf.len;
+
+      if (room < bytes) {
+	rv = sslBuffer_Grow(&ss->ssl3.hs.earlyHsBuf, PR_MAX(MIN_SEND_BUF_LENGTH,
+                            ss->ssl3.hs.earlyHsBuf.len + bytes));
+	if (rv != SECSuccess)
+	    return rv;	/* sslBuffer_Grow has set a memory error code. */
+      }
+
+      PORT_Memcpy(ss->ssl3.hs.earlyHsBuf.buf + ss->ssl3.hs.earlyHsBuf.len, src, bytes);
+      ss->ssl3.hs.earlyHsBuf.len += bytes;
+      return SECSuccess;
+    }
+
     if (ss->sec.ci.sendBuf.space < MAX_SEND_BUF_LENGTH && room < bytes) {
 	rv = sslBuffer_Grow(&ss->sec.ci.sendBuf, PR_MAX(MIN_SEND_BUF_LENGTH,
 		 PR_MIN(MAX_SEND_BUF_LENGTH, ss->sec.ci.sendBuf.len + bytes)));
@@ -4221,8 +4243,8 @@ ssl3_AppendHandshakeHeader(sslSocket *ss, SSL3HandshakeType t, PRUint32 length)
      * This empties the buffer. This is a convenient place to call
      * dtls_StageHandshakeMessage to mark the message boundary.
      */
-    if (IS_DTLS(ss)) {
-	rv = dtls_StageHandshakeMessage(ss);
+    if (IS_DTLS(ss) && !ss->ssl3.hs.divertHs) {
+        rv = dtls_StageHandshakeMessage(ss);
 	if (rv != SECSuccess) {
 	    return rv;
 	}
@@ -5162,6 +5184,14 @@ ssl3_SendClientHello(sslSocket *ss, PRBool resending)
         PR_RWLock_Rlock(sid->u.ssl3.lock);
     }
 
+    /* Generate the TLS 1.3 EarlyData data */
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+      rv = tls_SendEarlyHandshakeData(ss);
+      if (rv != SECSuccess) {
+	if (sid->u.ssl3.lock) { PR_RWLock_Unlock(sid->u.ssl3.lock); }
+	return rv;	/* err set in tls_GenerateEarlyHandshakeData */
+      }
+    }
     if (isTLS || (ss->firstHsDone && ss->peerRequestedProtection)) {
 	PRUint32 maxBytes = 65535; /* 2^16 - 1 */
 	PRInt32  extLen;
@@ -5414,6 +5444,95 @@ ssl3_SendClientHello(sslSocket *ss, PRBool resending)
 
     ss->ssl3.hs.ws = wait_server_hello;
     return rv;
+}
+
+
+/*
+ * Send optimistic TLS 1.3 and later ClientHello information
+ *
+ */
+static SECStatus
+tls_SendEarlyHandshakeData(sslSocket *ss)
+{
+    SECStatus rv;
+    PRUint16 oldSeq;
+
+    SSL_TRC(3, ("%d: SSL3[%d]: send early handshake data",
+		SSL_GETPID(), ss->fd));
+
+    /* Increment the sequence number so that we leave a gap for th
+       ClientHello we are in. */
+    oldSeq = ss->ssl3.hs.sendMessageSeq++;
+    PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
+    PORT_Assert( !ss->sec.isServer);
+
+    ss->ssl3.hs.divertHs = PR_TRUE;
+
+    rv = tls13_SendClientKeyShare(ss);
+    if (rv != SECSuccess)
+      goto loser;
+
+    ss->ssl3.hs.divertHs = PR_FALSE;
+    /* Restore the sequence number */
+    ss->ssl3.hs.sendMessageSeq = oldSeq;
+    return SECSuccess;
+
+ loser:
+    /* Restore the sequence number */
+    ss->ssl3.hs.sendMessageSeq = oldSeq;
+    ss->ssl3.hs.divertHs = PR_FALSE;
+    return SECFailure;
+}
+
+static SECStatus
+tls13_SendClientKeyShare(sslSocket *ss)
+{
+    SECStatus rv;
+    /* TODO(ekr@rtfm.com): Making this array > 1 will cause failures for now */
+    ECName curves_to_try[] = { ec_secp256r1 };
+    PRUint32 total_length = 0;
+    PRUint32 length;
+    int i;
+
+    // Optimistically try to send an ECDHE key using the
+    // configured curves.
+    SSL_TRC(3, ("%d: TLS13[%d]: send client key share",
+                SSL_GETPID(), ss->fd));
+
+    // First compute the length. This makes the keys as necessary
+    // as side effects.
+    for (i = 0; i < PR_ARRAY_SIZE(curves_to_try); i++) {
+        rv = tls13_PreEncodeECDHEClientKeyShareForGroup(ss,
+                                                        curves_to_try[i],
+                                                        &length);
+        if (rv != SECSuccess) {
+            goto loser;
+        }
+
+        total_length += length;
+    }
+
+    // Now send the message.
+    rv = ssl3_AppendHandshakeHeader(ss, client_key_share, total_length);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by ssl3_AppendHandshake* */
+    }
+
+    for (i = 0; i < PR_ARRAY_SIZE(curves_to_try); i++) {
+        rv = tls13_EncodeECDHEClientKeyShareForGroup(ss, curves_to_try[i]);
+        if (rv != SECSuccess) {
+            goto loser;
+        }
+
+        total_length += length;
+    }
+
+    /* Note: we do not change handshake state here. */
+    return SECSuccess;
+
+loser:
+    return SECFailure;
 }
 
 
@@ -11904,6 +12023,8 @@ ssl3_InitState(sslSocket *ss)
 	dtls_SetMTU(ss, 0); /* Set the MTU to the highest plateau */
     }
 
+    PR_INIT_CLIST(&ss->ssl3.hs.earlyMessages);
+
     PORT_Assert(!ss->ssl3.hs.messages.buf && !ss->ssl3.hs.messages.space);
     ss->ssl3.hs.messages.buf = NULL;
     ss->ssl3.hs.messages.space = 0;
@@ -12248,6 +12369,9 @@ ssl3_DestroySSL3Info(sslSocket *ss)
 	    PORT_Free(ss->ssl3.hs.recvdFragments.buf);
 	}
     }
+
+    /* Free TLS 1.3 early handshake messages */
+    dtls_FreeHandshakeMessages(&ss->ssl3.hs.earlyMessages);
 
     ss->ssl3.initialized = PR_FALSE;
 

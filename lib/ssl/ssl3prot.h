@@ -134,6 +134,8 @@ typedef enum {
     server_hello_done   = 14,
     certificate_verify  = 15,
     client_key_exchange = 16,
+    client_key_share    = 17,
+    server_key_share    = 18,
     finished            = 20,
     certificate_status  = 22,
     next_proto          = 67
