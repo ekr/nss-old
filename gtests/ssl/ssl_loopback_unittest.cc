@@ -275,6 +275,11 @@ class TlsAgent : public PollTarget {
     }
   }
 
+  void EnableCompression() {
+    SECStatus rv = SSL_OptionSet(ssl_fd_, SSL_ENABLE_DEFLATE, PR_TRUE);
+    ASSERT_EQ(SECSuccess, rv);
+  }
+
   bool EnsureTlsSetup() {
     // Don't set up twice
     if (ssl_fd_)
@@ -361,6 +366,10 @@ class TlsAgent : public PollTarget {
       return "UNKNOWN";
 
     return csinfo_.cipherSuiteName;
+  }
+
+  bool is_compressed() const {
+    return info_.compressionMethod != ssl_compression_null;
   }
 
   void CheckKEAType(SSLKEAType type) const {
@@ -610,6 +619,15 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only)
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
 }
 
+TEST_P(TlsConnectGeneric, ConnectWithCompression)
+{
+  EnsureTlsSetup();
+  client_->EnableCompression();
+  server_->EnableCompression();
+  Connect();
+  ASSERT_TRUE(client_->is_compressed());
+}
+
 #ifdef SSL_LIBRARY_VERSION_TLS_1_3
 
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_Only)
@@ -648,6 +666,22 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnlyMismatch)
   ConnectExpectFail(SSL_ERROR_NO_CYPHER_OVERLAP,
                     SSL_ERROR_NO_CYPHER_OVERLAP);
 }
+
+TEST_P(TlsConnectGeneric, ConnectTLS_1_3_WithCompressionOn)
+{
+  EnsureTlsSetup();
+  EnableSomeECDHECiphers();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+
+  client_->EnableCompression();
+  server_->EnableCompression();
+  Connect();
+  ASSERT_FALSE(client_->is_compressed());
+}
+
 #endif
 
 TEST_F(TlsConnectTest, ConnectECDHE)
