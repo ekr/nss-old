@@ -191,7 +191,7 @@ typedef enum {
     ssl_padding_xtn                  = 21,
     ssl_session_ticket_xtn           = 35,
     ssl_next_proto_nego_xtn          = 13172,
-    ssl_renegotiation_info_xtn       = 0xff01,	/* experimental number */
+    ssl_renegotiation_info_xtn       = 0xff01,
     ssl_tls13_draft_version_xtn      = 0xff02   /* experimental number */
 } SSLExtensionType;
 

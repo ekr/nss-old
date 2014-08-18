@@ -18,10 +18,6 @@
 #define SSL_LIBRARY_VERSION_TLS_1_2             0x0303
 #define SSL_LIBRARY_VERSION_TLS_1_3             0x0304
 
-/* The TLS 1.3 draft version. Used to avoid negotiating
-   between incompatible pre-standard TLS 1.3 drafts */
-#define SSL_LIBRARY_VERSION_TLS_1_3_DRAFT_VERSION  3
-
 /* Note: this is the internal format, not the wire format */
 #define SSL_LIBRARY_VERSION_DTLS_1_0            0x0302
 #define SSL_LIBRARY_VERSION_DTLS_1_2            0x0303
