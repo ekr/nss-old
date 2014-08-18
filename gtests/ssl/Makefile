@@ -47,3 +47,7 @@ include ../../cmd/platrules.mk
 
 CXX = clang++ -std=c++11
 CCC = $(CXX)
+
+ifdef NSS_ENABLE_TLS_1_3
+DEFINES += -DNSS_ENABLE_TLS_1_3
+endif

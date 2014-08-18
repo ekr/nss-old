@@ -219,7 +219,8 @@ class TlsAgent : public PollTarget {
       adapter_(nullptr),
       ssl_fd_(nullptr),
       role_(role),
-      state_(INIT) {}
+      state_(INIT),
+      err_code_(0) {}
 
   ~TlsAgent() {
     if (pr_fd_) {
@@ -325,6 +326,7 @@ class TlsAgent : public PollTarget {
   }
 
   State state() const { return state_; }
+  int32_t err_code() const { return err_code_; }
 
   const char* state_str() const {
     return state_str(state());
@@ -401,6 +403,7 @@ class TlsAgent : public PollTarget {
       default:
         LOG("Handshake failed with error " << err);
         SetState(ERROR);
+        err_code_ = err;
         return;
     }
   }
@@ -443,6 +446,7 @@ class TlsAgent : public PollTarget {
   PRFileDesc* ssl_fd_;
   Role role_;
   State state_;
+  int32_t err_code_;
   SSLChannelInfo info_;
   SSLCipherSuiteInfo csinfo_;
 };
@@ -513,6 +517,23 @@ class TlsConnectTestBase : public ::testing::Test {
 
     std::cerr << "Connected with cipher suite "
               << client_->cipher_suite_name() << std::endl;
+  }
+
+  void ConnectExpectFail(int32_t client_status=0, int32_t server_status=0) {
+    server_->StartConnect(); // Server
+    client_->StartConnect(); // Client
+    client_->Handshake();
+    server_->Handshake();
+
+    ASSERT_TRUE_WAIT(client_->state() != TlsAgent::CONNECTING &&
+                     server_->state() != TlsAgent::CONNECTING, 5000);
+    ASSERT_EQ(TlsAgent::ERROR, server_->state());
+    if (client_status) {
+      ASSERT_EQ(client_status, client_->err_code());
+    }
+    if (server_status) {
+      ASSERT_EQ(server_status, server_->err_code());
+    }
   }
 
   void EnableSomeECDHECiphers() {
@@ -588,6 +609,32 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only)
   Connect();
   client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
 }
+
+#ifdef NSS_ENABLE_TLS_1_3
+TEST_P(TlsConnectGeneric, ConnectTLS_1_3_Only)
+{
+  EnsureTlsSetup();
+  EnableSomeECDHECiphers();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  Connect();
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+}
+
+TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnly)
+{
+  EnsureTlsSetup();
+  EnableSomeECDHECiphers();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  Connect();
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+}
+#endif
 
 TEST_F(TlsConnectTest, ConnectECDHE)
 {
