@@ -2482,9 +2482,6 @@ ssl3_ServerHandleDraftVersionXtn(sslSocket * ss, PRUint16 ex_type,
         return SECSuccess;
     }
 
-    /* Keep track of negotiated extensions. */
-    ss->xtnData.negotiated[ss->xtnData.numNegotiated++] = ex_type;
-
     if (data->len != 2)
         goto loser;
 
@@ -2497,21 +2494,20 @@ ssl3_ServerHandleDraftVersionXtn(sslSocket * ss, PRUint16 ex_type,
 
     /* Compare the version */
     if (draft_number != TLS_1_3_DRAFT_VERSION) {
+        /* Incompatible TLS 1.3 implementation. Fall back to TLS 1.2
+         * TODO(ekr@rtfm.com): It's not entirely clear it's safe to roll back
+         * here. Need to double-check. */
         SSL_TRC(30, ("%d: SSL3[%d]: Incompatible version of TLS 1.3 (%d)",
                      SSL_GETPID(), ss->fd, draft_number));
-        goto loser;
+        ss->version = SSL_LIBRARY_VERSION_TLS_1_2;
+        return SECSuccess;
     }
 
+    /* We negotiated TLS 1.3. Keep track of negotiated extensions. */
+    ss->xtnData.negotiated[ss->xtnData.numNegotiated++] = ex_type;
     return SECSuccess;
-loser:
-    /* Something went wrong parsing this, which means it is an incompatible
-     * TLS 1.3 implementation. Fall back to TLS 1.2
-     * TODO(ekr@rtfm.com): It's not entirely clear it's safe to roll back
-     * here. Need to double-check. */
-    SSL_TRC(30, ("%d: SSL3[%d]: Incompatible version of TLS 1.3", SSL_GETPID(),
-                 ss->fd));
-    ss->version = SSL_LIBRARY_VERSION_TLS_1_2;
 
-    return SECSuccess;
+loser:
+    return SECFailure;
 }
 
