@@ -2450,9 +2450,7 @@ ssl3_ClientSendDraftVersionXtn(sslSocket * ss, PRBool append, PRUint32 maxBytes)
         rv = ssl3_AppendHandshakeNumber(ss, extension_length - 4, 2);
         if (rv != SECSuccess)
             goto loser;
-        rv = ssl3_AppendHandshakeNumber(ss,
-                                        TLS_1_3_DRAFT_VERSION,
-                                        2);
+        rv = ssl3_AppendHandshakeNumber(ss, TLS_1_3_DRAFT_VERSION, 2);
         if (rv != SECSuccess)
             goto loser;
         ss->xtnData.advertised[ss->xtnData.numAdvertised++] =
@@ -2475,7 +2473,7 @@ static SECStatus
 ssl3_ServerHandleDraftVersionXtn(sslSocket * ss, PRUint16 ex_type,
                                  SECItem *data)
 {
-    PRInt32 draft_number;
+    PRInt32 draft_version;
 
     /* Ignore this extension if we aren't doing TLS 1.3 */
     if (ss->version != SSL_LIBRARY_VERSION_TLS_1_3) {
@@ -2485,26 +2483,26 @@ ssl3_ServerHandleDraftVersionXtn(sslSocket * ss, PRUint16 ex_type,
     if (data->len != 2)
         goto loser;
 
-    /* Get the draft number out of the handshake */
-    draft_number= ssl3_ConsumeHandshakeNumber(ss, 2,
-                                              &data->data, &data->len);
-    if (draft_number < 0) {
+    /* Get the draft version out of the handshake */
+    draft_version = ssl3_ConsumeHandshakeNumber(ss, 2,
+                                                &data->data, &data->len);
+    if (draft_version < 0) {
         goto loser;
     }
 
+    /*  Keep track of negotiated extensions. */
+    ss->xtnData.negotiated[ss->xtnData.numNegotiated++] = ex_type;
+
     /* Compare the version */
-    if (draft_number != TLS_1_3_DRAFT_VERSION) {
+    if (draft_version != TLS_1_3_DRAFT_VERSION) {
         /* Incompatible TLS 1.3 implementation. Fall back to TLS 1.2
          * TODO(ekr@rtfm.com): It's not entirely clear it's safe to roll back
          * here. Need to double-check. */
-        SSL_TRC(30, ("%d: SSL3[%d]: Incompatible version of TLS 1.3 (%d)",
-                     SSL_GETPID(), ss->fd, draft_number));
+        SSL_TRC(30, ("%d: SSL3[%d]: Incompatible version of TLS 1.3 (%d), expected",
+                     SSL_GETPID(), ss->fd, draft_version, TLS_1_3_DRAFT_VERSION));
         ss->version = SSL_LIBRARY_VERSION_TLS_1_2;
-        return SECSuccess;
     }
 
-    /* We negotiated TLS 1.3. Keep track of negotiated extensions. */
-    ss->xtnData.negotiated[ss->xtnData.numNegotiated++] = ex_type;
     return SECSuccess;
 
 loser:
