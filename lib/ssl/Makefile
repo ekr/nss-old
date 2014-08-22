@@ -61,7 +61,3 @@ ifndef NSS_NO_PKCS11_BYPASS
 # indicates dependency on freebl static lib
 $(SHARED_LIBRARY): $(CRYPTOLIB)
 endif
-
-ifdef NSS_ENABLE_TLS_1_3
-DEFINES += -DNSS_ENABLE_TLS_1_3
-endif

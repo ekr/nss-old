@@ -85,4 +85,9 @@ ZLIB_LIBS = $(DIST)/lib/$(LIB_PREFIX)zlib.$(LIB_SUFFIX)
 EXTRA_LIBS += $(ZLIB_LIBS)
 endif
 
+# Allow build-time configuration of TLS 1.3 (Experimental)
+ifdef NSS_ENABLE_TLS_1_3
+DEFINES += -DNSS_ENABLE_TLS_1_3
+endif
+
 endif
