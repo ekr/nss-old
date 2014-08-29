@@ -52,6 +52,7 @@ static SECStatus ssl3_InitState(             sslSocket *ss);
 static SECStatus ssl3_SendCertificate(       sslSocket *ss);
 static SECStatus ssl3_SendCertificateStatus( sslSocket *ss);
 static SECStatus tls_SendEarlyHandshakeData(sslSocket *ss);
+static int tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len);
 static SECStatus tls13_SendClientKeyShare(sslSocket *ss);
 static SECStatus ssl3_SendEmptyCertificate(  sslSocket *ss);
 static SECStatus ssl3_SendCertificateRequest(sslSocket *ss);
@@ -5485,6 +5486,27 @@ tls_SendEarlyHandshakeData(sslSocket *ss)
     return SECFailure;
 }
 
+static int
+tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
+{
+    int tocpy;
+    unsigned int data_left;
+
+    if (len < 0) {
+        PORT_SetError(PR_INVALID_ARGUMENT_ERROR);
+        return SECFailure;
+    }
+
+    data_left = ss->ssl3.hs.earlyHsBuf.len - ss->ssl3.hs.earlyHsOffset;
+
+    tocpy = len > data_left ? data_left : len;
+
+    memcpy(buf, ss->ssl3.hs.earlyHsBuf.buf, tocpy);
+    ss->ssl3.hs.earlyHsOffset += tocpy;
+
+    return tocpy;
+}
+
 static SECStatus
 tls13_SendClientKeyShare(sslSocket *ss)
 {
@@ -5495,13 +5517,13 @@ tls13_SendClientKeyShare(sslSocket *ss)
     PRUint32 length;
     int i;
 
-    // Optimistically try to send an ECDHE key using the
-    // configured curves.
+    /* Optimistically try to send an ECDHE key using the
+     * configured curves. */
     SSL_TRC(3, ("%d: TLS13[%d]: send client key share",
                 SSL_GETPID(), ss->fd));
 
-    // First compute the length. This makes the keys as necessary
-    // as side effects.
+    /* First compute the length. This makes the keys as necessary
+     * as side effects. */
     for (i = 0; i < PR_ARRAY_SIZE(curves_to_try); i++) {
         rv = tls13_PreEncodeECDHEClientKeyShareForGroup(ss,
                                                         curves_to_try[i],
@@ -12023,11 +12045,15 @@ ssl3_InitState(sslSocket *ss)
 	dtls_SetMTU(ss, 0); /* Set the MTU to the highest plateau */
     }
 
-    PR_INIT_CLIST(&ss->ssl3.hs.earlyMessages);
-
     PORT_Assert(!ss->ssl3.hs.messages.buf && !ss->ssl3.hs.messages.space);
     ss->ssl3.hs.messages.buf = NULL;
     ss->ssl3.hs.messages.space = 0;
+
+    PORT_Assert(!ss->ssl3.hs.earlyHsBuf.buf && !ss->ssl3.hs.earlyHsBuf.space);
+    ss->ssl3.hs.earlyHsBuf.buf = NULL;
+    ss->ssl3.hs.earlyHsBuf.space = 0;
+    ss->ssl3.hs.earlyHsOffset = 0;
+    ss->ssl3.hs.divertHs = PR_FALSE;
 
     ss->ssl3.hs.receivedNewSessionTicket = PR_FALSE;
     PORT_Memset(&ss->ssl3.hs.newSessionTicket, 0,
@@ -12356,6 +12382,9 @@ ssl3_DestroySSL3Info(sslSocket *ss)
     /* free the SSL3Buffer (msg_body) */
     PORT_Free(ss->ssl3.hs.msg_body.buf);
 
+    /* free the TLS 1.3 early HS buffer */
+    PORT_Free(ss->ssl3.hs.earlyHsBuf.buf);
+
     SECITEM_FreeItem(&ss->ssl3.hs.newSessionTicket.ticket, PR_FALSE);
 
     /* free up the CipherSpecs */
@@ -12370,8 +12399,6 @@ ssl3_DestroySSL3Info(sslSocket *ss)
 	}
     }
 
-    /* Free TLS 1.3 early handshake messages */
-    dtls_FreeHandshakeMessages(&ss->ssl3.hs.earlyMessages);
 
     ss->ssl3.initialized = PR_FALSE;
 
