@@ -49,7 +49,7 @@ ssl3_GatherData(sslSocket *ss, sslGather *gs, int flags)
 	gs->readOffset  = 0;
 	gs->inbuf.len   = 0;
 
-        if (ss->ssl3.earlyHsBufOffset == ss->ssl3.earlyHsBuf.len)
+        if (ss->ssl3.hs.earlyHsOffset == ss->ssl3.hs.earlyHsBuf.len)
             ss->ssl3.hs.divertHs = PR_FALSE;
     }
 
