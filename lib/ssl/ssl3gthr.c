@@ -48,8 +48,11 @@ ssl3_GatherData(sslSocket *ss, sslGather *gs, int flags)
 	gs->writeOffset = 0;
 	gs->readOffset  = 0;
 	gs->inbuf.len   = 0;
+
+        if (ss->ssl3.earlyHsBufOffset == ss->ssl3.earlyHsBuf.len)
+            ss->ssl3.hs.divertHs = PR_FALSE;
     }
-    
+
     lbp = gs->inbuf.buf;
     for(;;) {
 	SSL_TRC(30, ("%d: SSL3[%d]: gather state %d (need %d more)",
@@ -335,7 +338,7 @@ ssl3_GatherCompleteHandshake(sslSocket *ss, int flags)
 		rv = ssl3_GatherData(ss, &ss->gs, flags);
 	    } else {
 		rv = dtls_GatherData(ss, &ss->gs, flags);
-		
+
 		/* If we got a would block error, that means that no data was
 		 * available, so we check the timer to see if it's time to
 		 * retransmit */

@@ -938,6 +938,7 @@ const ssl3CipherSuiteDef *suite_def;
     PRBool                divertHs;
     PRCList               earlyMessages;   /* Early handshake messages */
     sslBuffer             earlyHsBuf ;     /* Holding buffer */
+    unsigned int          earlyHsOffset;   /* Offset into the early HS buffer (read-side) */
 } SSL3HandshakeState;
 
 
