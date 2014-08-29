@@ -50,7 +50,7 @@ ssl3_GatherData(sslSocket *ss, sslGather *gs, int flags)
 	gs->inbuf.len   = 0;
 
         if (ss->ssl3.hs.earlyHsOffset == ss->ssl3.hs.earlyHsBuf.len)
-            ss->ssl3.hs.divertHs = PR_FALSE;
+            ss->ssl3.hs.divertHsIn = PR_FALSE;
     }
 
     lbp = gs->inbuf.buf;
@@ -58,7 +58,12 @@ ssl3_GatherData(sslSocket *ss, sslGather *gs, int flags)
 	SSL_TRC(30, ("%d: SSL3[%d]: gather state %d (need %d more)",
 		SSL_GETPID(), ss->fd, gs->state, gs->remainder));
 	bp = ((gs->state != GS_HEADER) ? lbp : gs->hdr) + gs->offset;
-	nb = ssl_DefRecv(ss, bp, gs->remainder, flags);
+
+        if (!ss->ssl3.hs.divertHsIn) {
+            nb = ssl_DefRecv(ss, bp, gs->remainder, flags);
+        } else {
+            nb = tls13_EarlyRecv(ss, bp, gs->remainder);
+        }
 
 	if (nb > 0) {
 	    PRINT_BUF(60, (ss, "raw gather data:", bp, nb));
@@ -177,6 +182,9 @@ dtls_GatherData(sslSocket *ss, sslGather *gs, int flags)
         gs->dtlsPacketOffset = 0;
         gs->dtlsPacket.len = 0;
 
+        if (ss->ssl3.hs.earlyHsOffset == ss->ssl3.hs.earlyHsBuf.len)
+            ss->ssl3.hs.divertHsIn = PR_FALSE;
+
         /* Resize to the maximum possible size so we can fit a full datagram */
 	/* This is the max fragment length for an encrypted fragment
 	** plus the size of the record header.
@@ -192,7 +200,11 @@ dtls_GatherData(sslSocket *ss, sslGather *gs, int flags)
         }
 
         /* recv() needs to read a full datagram at a time */
-        nb = ssl_DefRecv(ss, gs->dtlsPacket.buf, gs->dtlsPacket.space, flags);
+        if (!ss->ssl3.hs.divertHsIn) {
+            nb = ssl_DefRecv(ss, gs->dtlsPacket.buf, gs->dtlsPacket.space, flags);
+        } else {
+            nb = tls13_EarlyRecv(ss, gs->dtlsPacket.buf, gs->dtlsPacket.space);
+        }
 
         if (nb > 0) {
             PRINT_BUF(60, (ss, "raw gather data:", gs->dtlsPacket.buf, nb));

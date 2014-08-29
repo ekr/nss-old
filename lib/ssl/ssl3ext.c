@@ -2617,13 +2617,18 @@ ssl3_HandleExtendedMasterSecretXtn(sslSocket * ss, PRUint16 ex_type,
     return SECSuccess;
 }
 
-/* Sends early handshake messages for TLS 1.3 */
+/* Sends early handshake messages for TLS 1.3 *
+ * TODO(ekr@rtfm.com): This will need revisiting when we allow
+ a pplication_data */
+
 static PRInt32
 ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
                                  PRUint32 maxBytes)
 {
-    PRInt32 extension_length;
+    PRInt32 extension_len;
     SECStatus rv;
+
+    return 0;
 
     if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
         return 0;
@@ -2632,26 +2637,26 @@ ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
     if (!ss->ssl3.hs.earlyHsBuf.len)
         return 0;
 
-    extension_length = 2 + 2 +
+    extension_len = 2 + 2 +
+            (IS_DTLS(ss) ? DTLS_RECORD_HEADER_LENGTH : SSL3_RECORD_HEADER_LENGTH) +
             ss->ssl3.hs.earlyHsBuf.len;
 
-    if (append && maxBytes >= extension_length) {
+    if (append && maxBytes >= extension_len) {
         rv = ssl3_AppendHandshakeNumber(ss, ssl_early_hs_msg_xtn, 2);
         if (rv != SECSuccess)
             return -1;
 
-        rv = ssl3_AppendHandshakeVariable(ss,
-                                          ss->ssl3.hs.earlyHsBuf.buf,
-                                          ss->ssl3.hs.earlyHsBuf.len,
-                                          2);
+        rv = ssl3_AppendHandshakeNumber(ss, extension_len - 2, 2);
         if (rv != SECSuccess)
             return -1;
-    } else if (maxBytes < extension_length) {
+
+
+    } else if (maxBytes < extension_len) {
         PORT_Assert(0);
         return 0;
     }
 
-    return extension_length;
+    return extension_len;
 }
 
 
@@ -2685,6 +2690,7 @@ ssl3_ServerHandleEarlyHandshakeXtn(sslSocket * ss, PRUint16 ex_type, SECItem *da
 
     PORT_Memcpy(ss->ssl3.hs.earlyHsBuf.buf, data->data, data->len);
     ss->ssl3.hs.earlyHsBuf.len = data->len;
+    ss->ssl3.hs.divertHsIn = PR_TRUE;
     return SECSuccess;
 
 loser:

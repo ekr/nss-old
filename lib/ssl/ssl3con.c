@@ -52,7 +52,6 @@ static SECStatus ssl3_InitState(             sslSocket *ss);
 static SECStatus ssl3_SendCertificate(       sslSocket *ss);
 static SECStatus ssl3_SendCertificateStatus( sslSocket *ss);
 static SECStatus tls_SendEarlyHandshakeData(sslSocket *ss);
-static int tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len);
 static SECStatus tls13_SendClientKeyShare(sslSocket *ss);
 static SECStatus ssl3_SendEmptyCertificate(  sslSocket *ss);
 static SECStatus ssl3_SendCertificateRequest(sslSocket *ss);
@@ -2533,6 +2532,46 @@ ssl3_ClientAuthTokenPresent(sslSessionID *sid) {
     return isPresent;
 }
 
+/* Encode a record header */
+static void
+ssl3_EncodeRecordHeader(ssl3CipherSpec *     cwSpec,
+                        PRBool               isDTLS,
+                        PRBool               capRecordVersion,
+                        SSL3ContentType      type,
+                        SSL3SequenceNumber * seq_num,
+                        PRUint32             cipherBytes,
+                        sslBuffer *          wrBuf)
+{
+    wrBuf->buf[0] = type;
+    if (isDTLS) {
+        SSL3ProtocolVersion version;
+
+	version = dtls_TLSVersionToDTLSVersion(cwSpec->version);
+	wrBuf->buf[1] = MSB(version);
+	wrBuf->buf[2] = LSB(version);
+	wrBuf->buf[3] = (unsigned char)(seq_num->high >> 24);
+	wrBuf->buf[4] = (unsigned char)(seq_num->high >> 16);
+	wrBuf->buf[5] = (unsigned char)(seq_num->high >>  8);
+	wrBuf->buf[6] = (unsigned char)(seq_num->high >>  0);
+	wrBuf->buf[7] = (unsigned char)(seq_num->low  >> 24);
+	wrBuf->buf[8] = (unsigned char)(seq_num->low  >> 16);
+	wrBuf->buf[9] = (unsigned char)(seq_num->low  >>  8);
+	wrBuf->buf[10] = (unsigned char)(seq_num->low >>  0);
+	wrBuf->buf[11] = MSB(cipherBytes);
+	wrBuf->buf[12] = LSB(cipherBytes);
+    } else {
+	SSL3ProtocolVersion version = cwSpec->version;
+
+	if (capRecordVersion) {
+	    version = PR_MIN(SSL_LIBRARY_VERSION_TLS_1_0, version);
+	}
+	wrBuf->buf[1] = MSB(version);
+	wrBuf->buf[2] = LSB(version);
+	wrBuf->buf[3] = MSB(cipherBytes);
+	wrBuf->buf[4] = LSB(cipherBytes);
+    }
+}
+
 /* Caller must hold the spec read lock. */
 SECStatus
 ssl3_CompressMACEncryptRecord(ssl3CipherSpec *   cwSpec,
@@ -2713,35 +2752,9 @@ ssl3_CompressMACEncryptRecord(ssl3CipherSpec *   cwSpec,
     PORT_Assert(cipherBytes <= MAX_FRAGMENT_LENGTH + 1024);
 
     wrBuf->len    = cipherBytes + headerLen;
-    wrBuf->buf[0] = type;
-    if (isDTLS) {
-	SSL3ProtocolVersion version;
-
-	version = dtls_TLSVersionToDTLSVersion(cwSpec->version);
-	wrBuf->buf[1] = MSB(version);
-	wrBuf->buf[2] = LSB(version);
-	wrBuf->buf[3] = (unsigned char)(cwSpec->write_seq_num.high >> 24);
-	wrBuf->buf[4] = (unsigned char)(cwSpec->write_seq_num.high >> 16);
-	wrBuf->buf[5] = (unsigned char)(cwSpec->write_seq_num.high >>  8);
-	wrBuf->buf[6] = (unsigned char)(cwSpec->write_seq_num.high >>  0);
-	wrBuf->buf[7] = (unsigned char)(cwSpec->write_seq_num.low  >> 24);
-	wrBuf->buf[8] = (unsigned char)(cwSpec->write_seq_num.low  >> 16);
-	wrBuf->buf[9] = (unsigned char)(cwSpec->write_seq_num.low  >>  8);
-	wrBuf->buf[10] = (unsigned char)(cwSpec->write_seq_num.low >>  0);
-	wrBuf->buf[11] = MSB(cipherBytes);
-	wrBuf->buf[12] = LSB(cipherBytes);
-    } else {
-	SSL3ProtocolVersion version = cwSpec->version;
-
-	if (capRecordVersion) {
-	    version = PR_MIN(SSL_LIBRARY_VERSION_TLS_1_0, version);
-	}
-	wrBuf->buf[1] = MSB(version);
-	wrBuf->buf[2] = LSB(version);
-	wrBuf->buf[3] = MSB(cipherBytes);
-	wrBuf->buf[4] = LSB(cipherBytes);
-    }
-
+    ssl3_EncodeRecordHeader(cwSpec, isDTLS, capRecordVersion, type,
+                            &cwSpec->write_seq_num,
+                            cipherBytes, wrBuf);
     ssl3_BumpSequenceNumber(&cwSpec->write_seq_num);
 
     return SECSuccess;
@@ -4144,7 +4157,7 @@ ssl3_AppendHandshake(sslSocket *ss, const void *void_src, PRInt32 bytes)
     if (!bytes)
     	return SECSuccess;
 
-    if (ss->ssl3.hs.divertHs) {
+    if (ss->ssl3.hs.divertHsOut) {
       /* If we are in divert mode, just append whatever it is to
          the buffer so we can stuff it into an extension. */
       room = ss->ssl3.hs.earlyHsBuf.space - ss->ssl3.hs.earlyHsBuf.len;
@@ -4244,7 +4257,7 @@ ssl3_AppendHandshakeHeader(sslSocket *ss, SSL3HandshakeType t, PRUint32 length)
      * This empties the buffer. This is a convenient place to call
      * dtls_StageHandshakeMessage to mark the message boundary.
      */
-    if (IS_DTLS(ss) && !ss->ssl3.hs.divertHs) {
+    if (IS_DTLS(ss) && !ss->ssl3.hs.divertHsOut) {
         rv = dtls_StageHandshakeMessage(ss);
 	if (rv != SECSuccess) {
 	    return rv;
@@ -5468,13 +5481,13 @@ tls_SendEarlyHandshakeData(sslSocket *ss)
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
     PORT_Assert( !ss->sec.isServer);
 
-    ss->ssl3.hs.divertHs = PR_TRUE;
+    ss->ssl3.hs.divertHsOut = PR_TRUE;
 
     rv = tls13_SendClientKeyShare(ss);
     if (rv != SECSuccess)
       goto loser;
 
-    ss->ssl3.hs.divertHs = PR_FALSE;
+    ss->ssl3.hs.divertHsOut = PR_FALSE;
     /* Restore the sequence number */
     ss->ssl3.hs.sendMessageSeq = oldSeq;
     return SECSuccess;
@@ -5482,11 +5495,11 @@ tls_SendEarlyHandshakeData(sslSocket *ss)
  loser:
     /* Restore the sequence number */
     ss->ssl3.hs.sendMessageSeq = oldSeq;
-    ss->ssl3.hs.divertHs = PR_FALSE;
+    ss->ssl3.hs.divertHsOut = PR_FALSE;
     return SECFailure;
 }
 
-static int
+int
 tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
 {
     int tocpy;
@@ -12053,7 +12066,8 @@ ssl3_InitState(sslSocket *ss)
     ss->ssl3.hs.earlyHsBuf.buf = NULL;
     ss->ssl3.hs.earlyHsBuf.space = 0;
     ss->ssl3.hs.earlyHsOffset = 0;
-    ss->ssl3.hs.divertHs = PR_FALSE;
+    ss->ssl3.hs.divertHsIn = PR_FALSE;
+    ss->ssl3.hs.divertHsOut = PR_FALSE;
 
     ss->ssl3.hs.receivedNewSessionTicket = PR_FALSE;
     PORT_Memset(&ss->ssl3.hs.newSessionTicket, 0,

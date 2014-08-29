@@ -935,8 +935,8 @@ const ssl3CipherSuiteDef *suite_def;
     PRUint32              rtRetries;       /* The retry counter */
 
     /* These values are used for TLS 1.3 and later */
-    PRBool                divertHs;
-    PRCList               earlyMessages;   /* Early handshake messages */
+    PRBool                divertHsOut;
+    PRBool                divertHsIn;
     sslBuffer             earlyHsBuf ;     /* Holding buffer */
     unsigned int          earlyHsOffset;   /* Offset into the early HS buffer (read-side) */
 } SSL3HandshakeState;
@@ -1391,9 +1391,11 @@ extern void        ssl_DestroyGather(sslGather *gs);
 extern int         ssl2_GatherData(sslSocket *ss, sslGather *gs, int flags);
 extern int         ssl2_GatherRecord(sslSocket *ss, int flags);
 extern SECStatus   ssl_GatherRecord1stHandshake(sslSocket *ss);
+extern int tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len);
 
 extern SECStatus   ssl2_HandleClientHelloMessage(sslSocket *ss);
 extern SECStatus   ssl2_HandleServerHelloMessage(sslSocket *ss);
+
 
 extern SECStatus   ssl_CreateSecurityInfo(sslSocket *ss);
 extern SECStatus   ssl_CopySecurityInfo(sslSocket *ss, sslSocket *os);
