@@ -1457,6 +1457,15 @@ ssl3_CompressMACEncryptRecord(ssl3CipherSpec *   cwSpec,
 		              const SSL3Opaque * pIn,
 		              PRUint32           contentLen,
 		              sslBuffer *        wrBuf);
+extern void
+ssl3_EncodeRecordHeader(ssl3CipherSpec *     cwSpec,
+                        PRBool               isDTLS,
+                        PRBool               capRecordVersion,
+                        SSL3ContentType      type,
+                        SSL3SequenceNumber * seq_num,
+                        PRUint32             cipherBytes,
+                        unsigned char *      buf);
+
 extern PRInt32   ssl3_SendRecord(sslSocket *ss, DTLSEpoch epoch,
 				 SSL3ContentType type,
                                  const SSL3Opaque* pIn, PRInt32 nIn,

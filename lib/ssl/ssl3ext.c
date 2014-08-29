@@ -2627,8 +2627,8 @@ ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
 {
     PRInt32 extension_len;
     SECStatus rv;
-
-    return 0;
+    unsigned char hdr[DTLS_RECORD_HEADER_LENGTH];
+    PRInt32 hdr_len;
 
     if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
         return 0;
@@ -2637,19 +2637,33 @@ ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
     if (!ss->ssl3.hs.earlyHsBuf.len)
         return 0;
 
-    extension_len = 2 + 2 +
-            (IS_DTLS(ss) ? DTLS_RECORD_HEADER_LENGTH : SSL3_RECORD_HEADER_LENGTH) +
-            ss->ssl3.hs.earlyHsBuf.len;
+    hdr_len = IS_DTLS(ss) ? DTLS_RECORD_HEADER_LENGTH : SSL3_RECORD_HEADER_LENGTH;
+    extension_len = 2 + 2 + hdr_len + ss->ssl3.hs.earlyHsBuf.len;
 
     if (append && maxBytes >= extension_len) {
         rv = ssl3_AppendHandshakeNumber(ss, ssl_early_hs_msg_xtn, 2);
         if (rv != SECSuccess)
             return -1;
 
-        rv = ssl3_AppendHandshakeNumber(ss, extension_len - 2, 2);
+        rv = ssl3_AppendHandshakeNumber(ss, extension_len - 4, 2);
         if (rv != SECSuccess)
             return -1;
 
+        ssl3_EncodeRecordHeader(ss->ssl3.cwSpec,
+                                IS_DTLS(ss), PR_FALSE,
+                                content_handshake,
+                                NULL, // TODO(ekr@rtfm.com): Fix for DTLS
+                                ss->ssl3.hs.earlyHsBuf.len,
+                                hdr);
+        rv = ssl3_AppendHandshake(ss, hdr, hdr_len);
+        if (rv != SECSuccess)
+            return -1;
+
+        rv = ssl3_AppendHandshake(ss,
+                                  ss->ssl3.hs.earlyHsBuf.buf,
+                                  ss->ssl3.hs.earlyHsBuf.len);
+        if (rv != SECSuccess)
+            return -1;
 
     } else if (maxBytes < extension_len) {
         PORT_Assert(0);

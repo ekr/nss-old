@@ -2533,42 +2533,42 @@ ssl3_ClientAuthTokenPresent(sslSessionID *sid) {
 }
 
 /* Encode a record header */
-static void
+void
 ssl3_EncodeRecordHeader(ssl3CipherSpec *     cwSpec,
                         PRBool               isDTLS,
                         PRBool               capRecordVersion,
                         SSL3ContentType      type,
                         SSL3SequenceNumber * seq_num,
                         PRUint32             cipherBytes,
-                        sslBuffer *          wrBuf)
+                        unsigned char *      buf)
 {
-    wrBuf->buf[0] = type;
+    buf[0] = type;
     if (isDTLS) {
         SSL3ProtocolVersion version;
 
 	version = dtls_TLSVersionToDTLSVersion(cwSpec->version);
-	wrBuf->buf[1] = MSB(version);
-	wrBuf->buf[2] = LSB(version);
-	wrBuf->buf[3] = (unsigned char)(seq_num->high >> 24);
-	wrBuf->buf[4] = (unsigned char)(seq_num->high >> 16);
-	wrBuf->buf[5] = (unsigned char)(seq_num->high >>  8);
-	wrBuf->buf[6] = (unsigned char)(seq_num->high >>  0);
-	wrBuf->buf[7] = (unsigned char)(seq_num->low  >> 24);
-	wrBuf->buf[8] = (unsigned char)(seq_num->low  >> 16);
-	wrBuf->buf[9] = (unsigned char)(seq_num->low  >>  8);
-	wrBuf->buf[10] = (unsigned char)(seq_num->low >>  0);
-	wrBuf->buf[11] = MSB(cipherBytes);
-	wrBuf->buf[12] = LSB(cipherBytes);
+	buf[1] = MSB(version);
+	buf[2] = LSB(version);
+	buf[3] = (unsigned char)(seq_num->high >> 24);
+	buf[4] = (unsigned char)(seq_num->high >> 16);
+	buf[5] = (unsigned char)(seq_num->high >>  8);
+	buf[6] = (unsigned char)(seq_num->high >>  0);
+	buf[7] = (unsigned char)(seq_num->low  >> 24);
+	buf[8] = (unsigned char)(seq_num->low  >> 16);
+	buf[9] = (unsigned char)(seq_num->low  >>  8);
+	buf[10] = (unsigned char)(seq_num->low >>  0);
+	buf[11] = MSB(cipherBytes);
+	buf[12] = LSB(cipherBytes);
     } else {
 	SSL3ProtocolVersion version = cwSpec->version;
 
 	if (capRecordVersion) {
 	    version = PR_MIN(SSL_LIBRARY_VERSION_TLS_1_0, version);
 	}
-	wrBuf->buf[1] = MSB(version);
-	wrBuf->buf[2] = LSB(version);
-	wrBuf->buf[3] = MSB(cipherBytes);
-	wrBuf->buf[4] = LSB(cipherBytes);
+	buf[1] = MSB(version);
+	buf[2] = LSB(version);
+	buf[3] = MSB(cipherBytes);
+	buf[4] = LSB(cipherBytes);
     }
 }
 
@@ -2754,7 +2754,7 @@ ssl3_CompressMACEncryptRecord(ssl3CipherSpec *   cwSpec,
     wrBuf->len    = cipherBytes + headerLen;
     ssl3_EncodeRecordHeader(cwSpec, isDTLS, capRecordVersion, type,
                             &cwSpec->write_seq_num,
-                            cipherBytes, wrBuf);
+                            cipherBytes, wrBuf->buf);
     ssl3_BumpSequenceNumber(&cwSpec->write_seq_num);
 
     return SECSuccess;
@@ -5511,10 +5511,9 @@ tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
     }
 
     data_left = ss->ssl3.hs.earlyHsBuf.len - ss->ssl3.hs.earlyHsOffset;
-
     tocpy = len > data_left ? data_left : len;
-
-    memcpy(buf, ss->ssl3.hs.earlyHsBuf.buf, tocpy);
+    PORT_Memcpy(buf, ss->ssl3.hs.earlyHsBuf.buf + ss->ssl3.hs.earlyHsOffset,
+                tocpy);
     ss->ssl3.hs.earlyHsOffset += tocpy;
 
     return tocpy;
