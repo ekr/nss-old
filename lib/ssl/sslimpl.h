@@ -772,6 +772,7 @@ typedef enum {
     wait_cert_request, 
     wait_hello_done,
     wait_new_session_ticket,
+    wait_client_key_share,
     idle_handshake
 } SSL3WaitState;
 
@@ -1676,6 +1677,8 @@ typedef enum { ec_noName     = 0,
 extern SECStatus ssl3_ECName2Params(PLArenaPool *arena, ECName curve,
 				   SECKEYECParams *params);
 ECName	ssl3_GetCurveWithECKeyStrength(PRUint32 curvemsk, int requiredECCbits);
+ECName  ssl3_GetCurveNameForServerSocket(sslSocket *ss);
+
 
 #endif /* NSS_DISABLE_ECC */
 
@@ -1722,6 +1725,8 @@ extern SECStatus ssl3_HandleECDHClientKeyExchange(sslSocket *ss,
 				     SSL3Opaque *b, PRUint32 length,
                                      SECKEYPublicKey *srvrPubKey,
                                      SECKEYPrivateKey *srvrPrivKey);
+SECStatus
+tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length);
 extern SECStatus ssl3_SendECDHServerKeyExchange(sslSocket *ss,
 			const SSL3SignatureAndHashAlgorithm *sigAndHash);
 extern SECStatus tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve,

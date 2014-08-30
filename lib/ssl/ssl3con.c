@@ -5558,8 +5558,6 @@ tls13_SendClientKeyShare(sslSocket *ss)
         if (rv != SECSuccess) {
             goto loser;
         }
-
-        total_length += length;
     }
 
     /* Note: we do not change handshake state here. */
@@ -8629,12 +8627,18 @@ compression_found:
     ss->ssl3.hs.extendedMasterSecretUsed =
             ssl3_ExtensionNegotiated(ss, ssl_extended_master_secret_xtn);
     ss->ssl3.hs.isResuming = PR_FALSE;
-    ssl_GetXmitBufLock(ss);
-    rv = ssl3_SendServerHelloSequence(ss);
-    ssl_ReleaseXmitBufLock(ss);
-    if (rv != SECSuccess) {
-	errCode = PORT_GetError();
-	goto loser;
+
+    /* If this is TLS 1.3 we are expecting a ClientKeyShare message. */
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+        ss->ssl3.hs.ws = wait_client_key_share;
+    } else {
+        ssl_GetXmitBufLock(ss);
+        rv = ssl3_SendServerHelloSequence(ss);
+        ssl_ReleaseXmitBufLock(ss);
+        if (rv != SECSuccess) {
+            errCode = PORT_GetError();
+            goto loser;
+        }
     }
 
     if (haveXmitBufLock) {
@@ -9693,6 +9697,90 @@ skip:
     ss->ssl3.hs.ws = ss->sec.peerCert ? wait_cert_verify : wait_change_cipher;
     return SECSuccess;
 
+}
+
+
+/* Called from ssl3_HandleHandshakeMessage() when it has deciphered a complete
+ * ssl3 ClientKeyShare message from the remote client
+ * Caller must hold Handshake and RecvBuf locks.
+ */
+#define GROUP_IS_ECDHE(x) PR_TRUE
+
+static SECStatus
+tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
+{
+    PRInt32 expectedGroup;
+    SSL3AlertDescription desc = unexpected_message;
+    SECStatus rv;
+
+    SSL_TRC(3, ("%d: SSL3[%d]: handle client_key_share handshake",
+		SSL_GETPID(), ss->fd));
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+    if (ss->ssl3.hs.ws != wait_client_key_share) {
+    	PORT_SetError(SSL_ERROR_RX_UNEXPECTED_CLIENT_KEY_SHARE);
+	goto alert_loser;
+    }
+
+    /* Populate our notion of the key exchange type */
+    rv = ssl3_SetupPendingCipherSpec(ss);
+    if (rv != SECSuccess)
+        return rv; /* Error code set below */
+
+    /* Figure out what group we expect */
+    // TODO(ekr@rtfm.com): set ss->sec.keyType and ss->sec.keaKeyBits
+    switch (ss->ssl3.hs.kea_def->exchKeyType) {
+#ifndef NSS_DISABLE_ECC
+    case kt_ecdh:
+        expectedGroup = ssl3_GetCurveNameForServerSocket(ss);
+        break;
+#endif
+    default:
+        /* got an unknown or unsupported Key Exchange Algorithm.
+         * Can't happen. */
+        PORT_Assert(PR_FALSE);
+        PORT_SetError(SEC_ERROR_UNSUPPORTED_KEYALG);
+        return SECFailure;
+    }
+
+    /* Now walk through the keys until we find one for our group */
+       while (length) {
+        SECStatus rv;
+        PRInt32 group;
+        SECItem share;
+
+        group = ssl3_ConsumeHandshakeNumber(ss, 2, &b, &length);
+        if (group < 0) {
+            PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_KEY_SHARE);
+            goto alert_loser;
+        }
+
+        rv = ssl3_ConsumeHandshakeVariable(ss, &share, 2, &b, &length);
+        if (rv != SECSuccess) {
+            PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_KEY_SHARE);
+            goto alert_loser;
+        }
+
+        if (group == expectedGroup) {
+            rv = tls13_HandleECDHClientKeyShare(ss, share.data, share.len);
+            return rv;  /* Error set internally */
+        }
+    }
+
+    /* No acceptable group. In future, we will need to correct the client.
+     * Currently just generate an error.
+     * TODO(ekr@rtfm.com): Write code to correct client.
+     */
+    PORT_SetError(SSL_ERROR_NO_CYPHER_OVERLAP);
+    desc = handshake_failure;
+
+alert_loser:
+    SSL3_SendAlert(ss, alert_fatal, desc);
+
+loser:
+    return SECFailure;
 }
 
 /* This is TLS's equivalent of sending a no_certificate alert. */
@@ -11192,6 +11280,15 @@ ssl3_HandleHandshakeMessage(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	}
 	rv = ssl3_HandleClientKeyExchange(ss, b, length);
 	break;
+    case client_key_share:
+	if (!ss->sec.isServer) {
+	    (void)SSL3_SendAlert(ss, alert_fatal, unexpected_message);
+	    PORT_SetError(SSL_ERROR_RX_UNEXPECTED_CLIENT_KEY_SHARE);
+	    return SECFailure;
+	}
+	rv = tls13_HandleClientKeyShare(ss, b, length);
+	break;
+
     case new_session_ticket:
 	if (ss->sec.isServer) {
 	    (void)SSL3_SendAlert(ss, alert_fatal, unexpected_message);

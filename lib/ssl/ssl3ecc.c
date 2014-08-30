@@ -377,8 +377,8 @@ tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss,
     if (rv != SECSuccess)
         return rv;
 
-    *length = 3 + /* Curve type */
-              1 + /* Point length */
+    *length = 2 + /* Curve index */
+              2 + /* Length */
               ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len;
 
     return SECSuccess;
@@ -389,8 +389,6 @@ tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve)
 {
     SECStatus rv;
     ECName curve;
-    SECItem            ec_params = {siBuffer, NULL, 0};
-    unsigned char      paramBuf[3];
     SECKEYPublicKey *  ecdhePub;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
@@ -400,26 +398,13 @@ tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve)
     ecdhePub = ss->ephemeralECDHKeyPair->pubKey;
     curve = params2ecName(&ecdhePub->u.ec.DEREncodedParams);
 
-    PORT_Assert( ec_curve == curve);
-
-    ec_params.len  = sizeof paramBuf;
-    ec_params.data = paramBuf;
-    if (curve != ec_noName) {
-        ec_params.data[0] = ec_type_named;
-        ec_params.data[1] = 0x00;
-        ec_params.data[2] = curve;
-    } else {
-        PORT_SetError(SEC_ERROR_UNSUPPORTED_ELLIPTIC_CURVE);
-        goto loser;
-    }
-
-    rv = ssl3_AppendHandshake(ss, ec_params.data, ec_params.len);
+    rv = ssl3_AppendHandshakeNumber(ss, curve, 2);
     if (rv != SECSuccess) {
         goto loser;     /* err set by AppendHandshake. */
     }
 
     rv = ssl3_AppendHandshakeVariable(ss, ecdhePub->u.ec.publicValue.data,
-                                      ecdhePub->u.ec.publicValue.len, 1);
+                                      ecdhePub->u.ec.publicValue.len, 2);
     if (rv != SECSuccess) {
         goto loser;     /* err set by AppendHandshake. */
     }
@@ -442,7 +427,7 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, SSL3Opaque *b,
     SECStatus         rv;
     SECKEYPublicKey   clntPubKey;
     CK_MECHANISM_TYPE   target;
-    PRBool isTLS, isTLS12;
+    PRBool isTLS, isTLS12,isTLS13;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
@@ -453,15 +438,22 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, SSL3Opaque *b,
     clntPubKey.u.ec.DEREncodedParams.data =
         srvrPubKey->u.ec.DEREncodedParams.data;
 
-    rv = ssl3_ConsumeHandshakeVariable(ss, &clntPubKey.u.ec.publicValue,
-                                       1, &b, &length);
+    isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
+    isTLS12 = (PRBool)(ss->ssl3.prSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
+    isTLS13 = (PRBool)(ss->ssl3.prSpec->version >= SSL_LIBRARY_VERSION_TLS_1_3);
+
+    if (isTLS13) {
+        clntPubKey.u.ec.publicValue.len = length;
+        rv = ssl3_ConsumeHandshake(ss, clntPubKey.u.ec.publicValue.data,
+                                   length, &b, &length);
+    } else {
+        rv = ssl3_ConsumeHandshakeVariable(ss, &clntPubKey.u.ec.publicValue,
+                                           1, &b, &length);
+    }
     if (rv != SECSuccess) {
         SEND_ALERT
         return SECFailure;      /* XXX Who sets the error code?? */
     }
-
-    isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
-    isTLS12 = (PRBool)(ss->ssl3.prSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
 
     if (isTLS12) {
         target = CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256;
@@ -489,6 +481,37 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, SSL3Opaque *b,
         return SECFailure; /* error code set by ssl3_InitPendingCipherSpec */
     }
     return SECSuccess;
+}
+
+SECStatus
+tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
+{
+    ECName             curve;
+    SECStatus          rv;
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+    /* Generate ephemeral ECDH key pair and send the public key */
+    curve = ssl3_GetCurveNameForServerSocket(ss);
+    if (curve == ec_noName) {
+        return SECFailure;
+    }
+
+    if (ss->opt.reuseServerECDHEKey) {
+        rv = ssl3_CreateECDHEphemeralKeys(ss, curve);
+    } else {
+        rv = ssl3_CreateECDHEphemeralKeyPair(curve, &ss->ephemeralECDHKeyPair);
+    }
+    if (rv != SECSuccess) {
+        return SECFailure;
+    }
+
+    /* From here on it's like TLS 1.2 and below */
+    rv = ssl3_HandleECDHClientKeyExchange(ss, b, length,
+                                          ss->ephemeralECDHKeyPair->pubKey,
+                                          ss->ephemeralECDHKeyPair->privKey);
+    return rv;
 }
 
 ECName

@@ -425,3 +425,9 @@ ER3(SSL_ERROR_INAPPROPRIATE_FALLBACK_ALERT, (SSL_ERROR_BASE + 131),
 
 ER3(SSL_ERROR_RESUMPTION_WITHOUT_EXTENDED_MASTER_SECRET, (SSL_ERROR_BASE + 132),
     "The peer tried to resume without a correct extended_master_secret extension")
+
+ER3(SSL_ERROR_RX_UNEXPECTED_CLIENT_KEY_SHARE, (SSL_ERROR_BASE + 133),
+"SSL received an unexpected Client Key Share handshake message.")
+
+ER3(SSL_ERROR_RX_MALFORMED_CLIENT_KEY_SHARE , (SSL_ERROR_BASE + 134),
+"SSL received a malformed Client Key Share handshake message.")
