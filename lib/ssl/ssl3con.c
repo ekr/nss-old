@@ -60,6 +60,7 @@ static SECStatus ssl3_SendFinished(          sslSocket *ss, PRInt32 flags);
 static SECStatus ssl3_SendServerHello(       sslSocket *ss);
 static SECStatus ssl3_SendServerHelloDone(   sslSocket *ss);
 static SECStatus ssl3_SendServerKeyExchange( sslSocket *ss);
+static SECStatus tls13_SendServerKeyShare( sslSocket *ss);
 static SECStatus ssl3_UpdateHandshakeHashes( sslSocket *ss,
                                              const unsigned char *b,
                                              unsigned int l);
@@ -6358,7 +6359,12 @@ ssl3_SendCertificateVerify(sslSocket *ss)
 	rv = ssl3_ComputeBackupHandshakeHashes(ss, &hashes);
 	PORT_Assert(!ss->ssl3.hs.backupHash);
     } else {
-	rv = ssl3_ComputeHandshakeHashes(ss, ss->ssl3.pwSpec, &hashes, 0);
+        if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+            /* In TLS 1.3, we have already sent the CCS */
+            rv = ssl3_ComputeHandshakeHashes(ss, ss->ssl3.cwSpec, &hashes, 0);
+        } else {
+            rv = ssl3_ComputeHandshakeHashes(ss, ss->ssl3.pwSpec, &hashes, 0);
+        }
     }
     ssl_ReleaseSpecReadLock(ss);
     if (rv != SECSuccess) {
@@ -7825,6 +7831,58 @@ ssl3_SendServerHelloSequence(sslSocket *ss)
     return SECSuccess;
 }
 
+/* Called from:  ssl3_HandleClientHello */
+static SECStatus
+tls13_SendServerHelloSequence(sslSocket *ss)
+{
+    SECStatus         rv;
+
+    SSL_TRC(3, ("%d: TLS13[%d]: begin send server_hello sequence",
+		SSL_GETPID(), ss->fd));
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss) );
+
+    rv = ssl3_SendServerHello(ss);
+    if (rv != SECSuccess) {
+	return rv;	/* err code is set. */
+    }
+    rv = tls13_SendServerKeyShare(ss);
+    if (rv != SECSuccess) {
+	return rv;	/* err code is set. */
+    }
+    rv = ssl3_SendChangeCipherSpecs(ss);
+    if (rv != SECSuccess) {
+	return rv;	/* err code is set. */
+    }
+    rv = ssl3_SendCertificate(ss);
+    if (rv != SECSuccess) {
+	return rv;	/* error code is set. */
+    }
+    rv = ssl3_SendCertificateStatus(ss);
+    if (rv != SECSuccess) {
+	return rv;	/* error code is set. */
+    }
+    if (ss->opt.requestCertificate) {
+	rv = ssl3_SendCertificateRequest(ss);
+	if (rv != SECSuccess) {
+	    return rv;		/* err code is set. */
+	}
+    }
+    rv = ssl3_SendCertificateVerify(ss);
+    if (rv != SECSuccess) {
+        return rv;		/* err code is set. */
+    }
+    rv = ssl3_SendFinished(ss, 0);
+    if (rv != SECSuccess) {
+	return rv;	/* error code is set. */
+    }
+
+    ss->ssl3.hs.ws = (ss->opt.requestCertificate) ? wait_client_cert
+                                               : wait_finished;
+    return SECSuccess;
+}
+
 /* An empty TLS Renegotiation Info (RI) extension */
 static const PRUint8 emptyRIext[5] = {0xff, 0x01, 0x00, 0x01, 0x00};
 
@@ -9175,6 +9233,28 @@ loser:
 
 
 static SECStatus
+tls13_SendServerKeyShare(sslSocket* ss)
+{
+    SECStatus rv = SECFailure;
+
+    switch (ss->ssl3.hs.kea_def->exchKeyType) {
+#ifndef NSS_DISABLE_ECC
+    case kt_ecdh:
+        rv = tls13_SendECDHServerKeyShare(ss);
+        break;
+#endif
+    default:
+        /* got an unknown or unsupported Key Exchange Algorithm.
+         * Can't happen. */
+        PORT_Assert(PR_FALSE);
+        PORT_SetError(SEC_ERROR_UNSUPPORTED_KEYALG);
+        break;
+    }
+
+    return rv;  /* err code already set */
+}
+
+static SECStatus
 ssl3_SendCertificateRequest(sslSocket *ss)
 {
     PRBool         isTLS12;
@@ -9712,6 +9792,7 @@ tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     PRInt32 expectedGroup;
     SSL3AlertDescription desc = unexpected_message;
     SECStatus rv;
+    PRBool found = PR_FALSE;
 
     SSL_TRC(3, ("%d: SSL3[%d]: handle client_key_share handshake",
 		SSL_GETPID(), ss->fd));
@@ -9746,7 +9827,7 @@ tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     }
 
     /* Now walk through the keys until we find one for our group */
-       while (length) {
+    while (length) {
         SECStatus rv;
         PRInt32 group;
         SECItem share;
@@ -9765,16 +9846,30 @@ tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 
         if (group == expectedGroup) {
             rv = tls13_HandleECDHClientKeyShare(ss, share.data, share.len);
-            return rv;  /* Error set internally */
+            if (rv != SECSuccess)
+                return rv;
+            found = PR_TRUE;
+            break;
         }
     }
 
-    /* No acceptable group. In future, we will need to correct the client.
-     * Currently just generate an error.
-     * TODO(ekr@rtfm.com): Write code to correct client.
-     */
-    PORT_SetError(SSL_ERROR_NO_CYPHER_OVERLAP);
-    desc = handshake_failure;
+    if (!found) {
+        /* No acceptable group. In future, we will need to correct the client.
+         * Currently just generate an error.
+         * TODO(ekr@rtfm.com): Write code to correct client.
+         */
+        PORT_SetError(SSL_ERROR_NO_CYPHER_OVERLAP);
+        desc = handshake_failure;
+        goto alert_loser;
+    }
+
+    ssl_GetXmitBufLock(ss);
+    rv = tls13_SendServerHelloSequence(ss);
+    ssl_ReleaseXmitBufLock(ss);
+
+    if (rv != SECSuccess) {
+        goto loser;
+    }
 
 alert_loser:
     SSL3_SendAlert(ss, alert_fatal, desc);

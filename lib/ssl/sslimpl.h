@@ -1729,6 +1729,8 @@ SECStatus
 tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length);
 extern SECStatus ssl3_SendECDHServerKeyExchange(sslSocket *ss,
 			const SSL3SignatureAndHashAlgorithm *sigAndHash);
+SECStatus
+tls13_SendECDHServerKeyShare(sslSocket *ss);
 extern SECStatus tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve,
   PRUint32* length);
 extern SECStatus tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve);

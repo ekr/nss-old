@@ -974,6 +974,35 @@ loser:
     return SECFailure;
 }
 
+/*
+ * Called from tls13_SendServerHelloSequence
+ */
+SECStatus
+tls13_SendECDHServerKeyShare(sslSocket *ss)
+{
+    SECStatus rv;
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
+
+    rv = ssl3_AppendHandshakeHeader(ss, server_key_share,
+                                    ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len + 1);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by ssl3_AppendHandshake* */
+    }
+
+    rv = ssl3_AppendHandshakeVariable(ss,
+                                      ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.data,
+                                      ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len,
+                                      1);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by AppendHandshake. */
+    }
+
+loser:
+    return rv;  /* err code set internally */
+}
+
 /* Lists of ECC cipher suites for searching and disabling. */
 
 static const ssl3CipherSuite ecdh_suites[] = {
