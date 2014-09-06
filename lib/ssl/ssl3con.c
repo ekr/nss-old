@@ -3563,7 +3563,12 @@ ssl3_HandleChangeCipherSpecs(sslSocket *ss, sslBuffer *buf)
 
     ss->ssl3.prSpec  = ss->ssl3.crSpec;
     ss->ssl3.crSpec  = prSpec;
-    ss->ssl3.hs.ws   = wait_finished;
+
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
+        ss->ssl3.hs.ws   = wait_finished;
+    } else {
+        ss->ssl3.hs.ws   = wait_server_cert;
+    }
 
     SSL_TRC(3, ("%d: SSL3[%d] Set Current Read Cipher Suite to Pending",
 		SSL_GETPID(), ss->fd ));
@@ -4098,6 +4103,14 @@ ssl3_UpdateHandshakeHashes(sslSocket *ss, const unsigned char *b,
      * which handshake hash function to use. */
     if (ss->ssl3.hs.hashType == handshake_hash_unknown) {
 	return sslBuffer_Append(&ss->ssl3.hs.messages, b, l);
+    }
+
+    // TODO(ekr@rtfm.com): delete
+    {
+        char label[200];
+        snprintf(label, sizeof(label), "EKR: Hash: %s",
+                 ss->sec.isServer ? "server" : "client");
+        PRINT_BUF(1, (NULL, label, b, l));
     }
 
     PRINT_BUF(90, (NULL, "handshake hash input:", b, l));
@@ -5457,7 +5470,6 @@ ssl3_SendClientHello(sslSocket *ss, PRBool resending)
 	return rv;	/* error code set by ssl3_FlushHandshake */
     }
 
-    ss->ssl3.hs.ws = wait_server_hello;
     return rv;
 }
 
@@ -5491,6 +5503,7 @@ tls_SendEarlyHandshakeData(sslSocket *ss)
     ss->ssl3.hs.divertHsOut = PR_FALSE;
     /* Restore the sequence number */
     ss->ssl3.hs.sendMessageSeq = oldSeq;
+
     return SECSuccess;
 
  loser:
@@ -6336,7 +6349,7 @@ loser:
 
 /* Called from ssl3_HandleServerHelloDone(). */
 static SECStatus
-ssl3_SendCertificateVerify(sslSocket *ss)
+ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
 {
     SECStatus     rv		= SECFailure;
     PRBool        isTLS;
@@ -6373,8 +6386,8 @@ ssl3_SendCertificateVerify(sslSocket *ss)
 
     isTLS = (PRBool)(ss->ssl3.pwSpec->version > SSL_LIBRARY_VERSION_3_0);
     isTLS12 = (PRBool)(ss->ssl3.pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
-    keyType = ss->ssl3.clientPrivateKey->keyType;
-    rv = ssl3_SignHashes(&hashes, ss->ssl3.clientPrivateKey, &buf, isTLS);
+    keyType = privKey->keyType;
+    rv = ssl3_SignHashes(&hashes, privKey, &buf, isTLS);
     if (rv == SECSuccess) {
 	PK11SlotInfo * slot;
 	sslSessionID * sid   = ss->sec.ci.sid;
@@ -6383,15 +6396,14 @@ ssl3_SendCertificateVerify(sslSocket *ss)
 	** Later, when doing an SSL restart handshake, verify this.
 	** These calls are mere accessors, and can't fail.
 	*/
-	slot = PK11_GetSlotFromPrivateKey(ss->ssl3.clientPrivateKey);
+        /* TODO(ekr@rtfm.com): Rename these or conditionalize? */
+	slot = PK11_GetSlotFromPrivateKey(privKey);
 	sid->u.ssl3.clAuthSeries     = PK11_GetSlotSeries(slot);
 	sid->u.ssl3.clAuthSlotID     = PK11_GetSlotID(slot);
 	sid->u.ssl3.clAuthModuleID   = PK11_GetModuleID(slot);
 	sid->u.ssl3.clAuthValid      = PR_TRUE;
 	PK11_FreeSlot(slot);
     }
-    SECKEY_DestroyPrivateKey(ss->ssl3.clientPrivateKey);
-    ss->ssl3.clientPrivateKey = NULL;
     if (rv != SECSuccess) {
 	goto done;	/* err code was set by ssl3_SignHashes */
     }
@@ -6790,7 +6802,11 @@ ssl3_HandleServerHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
             ssl3_ExtensionNegotiated(ss, ssl_extended_master_secret_xtn);
 
     ss->ssl3.hs.isResuming = PR_FALSE;
-    ss->ssl3.hs.ws         = wait_server_cert;
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+        ss->ssl3.hs.ws         = wait_server_key_share;
+    } else {
+        ss->ssl3.hs.ws         = wait_server_cert;
+    }
     return SECSuccess;
 
 alert_loser:
@@ -7085,6 +7101,53 @@ no_memory:	/* no-memory error has already been set. */
     return SECFailure;
 }
 
+/* Called from ssl3_HandleHandshakeMessage() when it has deciphered a complete
+ * ssl3 ServerKeyShare message.
+ * Caller must hold Handshake and RecvBuf locks.
+ */
+static SECStatus
+tls13_HandleServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
+{
+    int              errCode   = SSL_ERROR_RX_MALFORMED_SERVER_KEY_SHARE;
+    SSL3AlertDescription desc  = illegal_parameter;
+    SECStatus rv;
+
+    SSL_TRC(3, ("%d: SSL3[%d]: handle server_key_share handshake",
+		SSL_GETPID(), ss->fd));
+    PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+
+    if (ss->ssl3.hs.ws != wait_server_key_share) {
+	errCode = SSL_ERROR_RX_UNEXPECTED_SERVER_KEY_SHARE;
+	desc    = unexpected_message;
+	goto alert_loser;
+    }
+
+    switch (ss->ssl3.hs.kea_def->exchKeyType) {
+#ifndef NSS_DISABLE_ECC
+    case kt_ecdh:
+	rv = tls13_HandleECDHServerKeyShare(ss, b, length);
+        break;
+#endif /* NSS_DISABLE_ECC */
+    default:
+    	desc    = handshake_failure;
+	errCode = SEC_ERROR_UNSUPPORTED_KEYALG;
+        goto alert_loser;
+    }
+
+    if (rv != SECSuccess) {
+        goto alert_loser;
+    }
+
+    ss->ssl3.hs.ws = wait_change_cipher;
+    return SECSuccess;
+
+alert_loser:
+    (void)SSL3_SendAlert(ss, alert_fatal, desc);
+    PORT_SetError( errCode );
+    return SECFailure;
+}
 
 /*
  * Returns the TLS signature algorithm for the client authentication key and
@@ -7565,7 +7628,9 @@ ssl3_SendClientSecondRound(sslSocket *ss)
     }
 
     if (sendClientCert) {
-	rv = ssl3_SendCertificateVerify(ss);
+	rv = ssl3_SendCertificateVerify(ss, ss->ssl3.clientPrivateKey);
+        SECKEY_DestroyPrivateKey(ss->ssl3.clientPrivateKey);
+        ss->ssl3.clientPrivateKey = NULL;
 	if (rv != SECSuccess) {
 	    goto loser;	/* err is set. */
         }
@@ -7869,7 +7934,16 @@ tls13_SendServerHelloSequence(sslSocket *ss)
 	    return rv;		/* err code is set. */
 	}
     }
-    rv = ssl3_SendCertificateVerify(ss);
+
+    /* XXX SSLKEAType isn't really a good choice for
+     * indexing certificates but that's all we have
+     * for now.
+     */
+    rv = ssl3_SendCertificateVerify(ss,
+                                    ss->ssl3.hs.kea_def->signKeyType ==
+                                    sign_rsa ?
+                                    ss->serverCerts[kt_rsa].SERVERKEY :
+                                    ss->serverCerts[kt_rsa].SERVERKEY);
     if (rv != SECSuccess) {
         return rv;		/* err code is set. */
     }
@@ -7979,7 +8053,13 @@ ssl3_HandleClientHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	errCode = SSL_ERROR_UNSUPPORTED_VERSION;
 	goto alert_loser;
     }
-
+    /* Generate the Server Random now so it is available
+     * when we process the ClientKeyShare in TLS 1.3 */
+    rv = ssl3_GetNewRandom(&ss->ssl3.hs.server_random);
+    if (rv != SECSuccess) {
+	ssl_MapLowLevelError(SSL_ERROR_GENERATE_RANDOM_FAILURE);
+	return rv;
+    }
     rv = ssl3_InitHandshakeHashes(ss);
     if (rv != SECSuccess) {
 	desc = internal_error;
@@ -8990,11 +9070,7 @@ ssl3_SendServerHello(sslSocket *ss)
     if (rv != SECSuccess) {
 	return rv;	/* err set by AppendHandshake. */
     }
-    rv = ssl3_GetNewRandom(&ss->ssl3.hs.server_random);
-    if (rv != SECSuccess) {
-	ssl_MapLowLevelError(SSL_ERROR_GENERATE_RANDOM_FAILURE);
-	return rv;
-    }
+    /* Random already generated in ssl3_HandleClientHello */
     rv = ssl3_AppendHandshake(
 	ss, &ss->ssl3.hs.server_random, SSL3_RANDOM_LENGTH);
     if (rv != SECSuccess) {
@@ -9377,7 +9453,9 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
     isTLS12 = (PRBool)(ss->ssl3.prSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
 
-    if (ss->ssl3.hs.ws != wait_cert_verify || ss->sec.peerCert == NULL) {
+    if ((ss->ssl3.hs.ws != wait_cert_verify
+         && ss->ssl3.hs.ws != wait_cert_request)
+        || ss->sec.peerCert == NULL) {
 	desc    = unexpected_message;
 	errCode = SSL_ERROR_RX_UNEXPECTED_CERT_VERIFY;
 	goto alert_loser;
@@ -9426,7 +9504,9 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
 	desc    = isTLS ? decode_error : illegal_parameter;
 	goto alert_loser;	/* malformed */
     }
-    ss->ssl3.hs.ws = wait_change_cipher;
+
+    ss->ssl3.hs.ws = ss->version < SSL_LIBRARY_VERSION_TLS_1_3 ?
+            wait_change_cipher : wait_finished;
     return SECSuccess;
 
 alert_loser:
@@ -9838,19 +9918,23 @@ tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
             goto alert_loser;
         }
 
+        if (group == expectedGroup) {
+            rv = tls13_HandleECDHClientKeyShare(ss, b, length);
+            if (rv != SECSuccess)
+                return rv;
+            found = PR_TRUE;
+            /* TODO(ekr@rtfm.com): Check that the rest of the message
+             * is properly formatted */
+            break;
+        }
+
+        /* We are skipping this one */
         rv = ssl3_ConsumeHandshakeVariable(ss, &share, 2, &b, &length);
         if (rv != SECSuccess) {
             PORT_SetError(SSL_ERROR_RX_MALFORMED_CLIENT_KEY_SHARE);
             goto alert_loser;
         }
 
-        if (group == expectedGroup) {
-            rv = tls13_HandleECDHClientKeyShare(ss, share.data, share.len);
-            if (rv != SECSuccess)
-                return rv;
-            found = PR_TRUE;
-            break;
-        }
     }
 
     if (!found) {
@@ -9870,6 +9954,7 @@ tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     if (rv != SECSuccess) {
         goto loser;
     }
+    return SECSuccess;
 
 alert_loser:
     SSL3_SendAlert(ss, alert_fatal, desc);
@@ -10507,16 +10592,18 @@ ssl3_AuthCertificate(sslSocket *ss)
     	}
 
 	ss->ssl3.hs.ws = wait_cert_request; /* disallow server_key_exchange */
-	if (ss->ssl3.hs.kea_def->is_limited ||
-	    /* XXX OR server cert is signing only. */
+	if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3 &&
+            (ss->ssl3.hs.kea_def->is_limited ||
+             /* XXX OR server cert is signing only. */
 #ifndef NSS_DISABLE_ECC
-	    ss->ssl3.hs.kea_def->kea == kea_ecdhe_ecdsa ||
-	    ss->ssl3.hs.kea_def->kea == kea_ecdhe_rsa ||
+             ss->ssl3.hs.kea_def->kea == kea_ecdhe_ecdsa ||
+             ss->ssl3.hs.kea_def->kea == kea_ecdhe_rsa ||
 #endif /* NSS_DISABLE_ECC */
-	    ss->ssl3.hs.kea_def->exchKeyType == kt_dh) {
+             ss->ssl3.hs.kea_def->exchKeyType == kt_dh)) {
 	    ss->ssl3.hs.ws = wait_server_key; /* allow server_key_exchange */
 	}
     } else {
+        /* TODO(ekr@rtfm.com): TLS 1.3 */
 	ss->ssl3.hs.ws = wait_client_key;
     }
 
@@ -11208,7 +11295,8 @@ ssl3_HandleHandshakeMessage(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     ssl_GetSpecReadLock(ss);	/************************************/
     if((type == finished) || (type == certificate_verify)) {
 	SSL3Sender      sender = (SSL3Sender)0;
-	ssl3CipherSpec *rSpec  = ss->ssl3.prSpec;
+	ssl3CipherSpec *rSpec  = ss->version >= SSL_LIBRARY_VERSION_TLS_1_3 ?
+                ss->ssl3.crSpec : ss->ssl3.prSpec;
 
 	if (type == finished) {
 	    sender = ss->sec.isServer ? sender_client : sender_server;
@@ -11237,7 +11325,8 @@ ssl3_HandleHandshakeMessage(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     }
     /* We should not include hello_request and hello_verify_request messages
      * in the handshake hashes */
-    if ((ss->ssl3.hs.msg_type != hello_request) &&
+    if (!ss->ssl3.hs.divertHsIn &&
+        (ss->ssl3.hs.msg_type != hello_request) &&
 	(ss->ssl3.hs.msg_type != hello_verify_request)) {
 	rv = ssl3_UpdateHandshakeHashes(ss, (unsigned char*) hdr, 4);
 	if (rv != SECSuccess) return rv;	/* err code already set. */
@@ -11360,7 +11449,7 @@ ssl3_HandleHandshakeMessage(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	rv = ssl3_HandleServerHelloDone(ss);
 	break;
     case certificate_verify:
-	if (!ss->sec.isServer) {
+	if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3 && !ss->sec.isServer) {
 	    (void)SSL3_SendAlert(ss, alert_fatal, unexpected_message);
 	    PORT_SetError(SSL_ERROR_RX_UNEXPECTED_CERT_VERIFY);
 	    return SECFailure;
@@ -11383,7 +11472,14 @@ ssl3_HandleHandshakeMessage(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	}
 	rv = tls13_HandleClientKeyShare(ss, b, length);
 	break;
-
+    case server_key_share:
+	if (ss->sec.isServer) {
+	    (void)SSL3_SendAlert(ss, alert_fatal, unexpected_message);
+	    PORT_SetError(SSL_ERROR_RX_UNEXPECTED_SERVER_KEY_SHARE);
+	    return SECFailure;
+	}
+	rv = tls13_HandleServerKeyShare(ss, b, length);
+	break;
     case new_session_ticket:
 	if (ss->sec.isServer) {
 	    (void)SSL3_SendAlert(ss, alert_fatal, unexpected_message);

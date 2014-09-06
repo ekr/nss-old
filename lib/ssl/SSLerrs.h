@@ -431,3 +431,9 @@ ER3(SSL_ERROR_RX_UNEXPECTED_CLIENT_KEY_SHARE, (SSL_ERROR_BASE + 133),
 
 ER3(SSL_ERROR_RX_MALFORMED_CLIENT_KEY_SHARE , (SSL_ERROR_BASE + 134),
 "SSL received a malformed Client Key Share handshake message.")
+
+ER3(SSL_ERROR_RX_UNEXPECTED_SERVER_KEY_SHARE, (SSL_ERROR_BASE + 134),
+"SSL received an unexpected Server Key Share handshake message.")
+
+ER3(SSL_ERROR_RX_MALFORMED_SERVER_KEY_SHARE , (SSL_ERROR_BASE + 135),
+"SSL received a malformed Server Key Share handshake message.")

@@ -414,6 +414,7 @@ tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve)
 loser:
     return SECFailure;
 }
+
 /*
 ** Called from ssl3_HandleClientKeyExchange()
 */
@@ -483,6 +484,58 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, SSL3Opaque *b,
     return SECSuccess;
 }
 
+/*
+** Called from tls13_HandleECDHClientKeyShare()
+**             tls13_HandleECDHServerKeyShare()
+*/
+SECStatus
+tls13_HandleECDHKeyShare(sslSocket *ss, SSL3Opaque *b,
+                         PRUint32 length,
+                         SECKEYPublicKey *myPubKey,
+                         SECKEYPrivateKey *myPrivKey)
+{
+    PK11SymKey *      pms;
+    SECStatus         rv;
+    SECKEYPublicKey   peerPubKey;
+    CK_MECHANISM_TYPE target;
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+    peerPubKey.keyType = ecKey;
+    peerPubKey.u.ec.DEREncodedParams.len =
+        myPubKey->u.ec.DEREncodedParams.len;
+    peerPubKey.u.ec.DEREncodedParams.data =
+        myPubKey->u.ec.DEREncodedParams.data;
+
+    rv = ssl3_ConsumeHandshakeVariable(ss, &peerPubKey.u.ec.publicValue, 2, &b, &length);
+    if (rv != SECSuccess) {
+        SEND_ALERT
+        return SECFailure;      /* XXX Who sets the error code?? */
+    }
+
+    target = CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256;
+
+    /*  Determine the PMS */
+    pms = PK11_PubDeriveWithKDF(myPrivKey, &peerPubKey, PR_FALSE, NULL, NULL,
+                                CKM_ECDH1_DERIVE, target, CKA_DERIVE, 0,
+                                CKD_NULL, NULL, NULL);
+
+    if (pms == NULL) {
+        /* last gasp.  */
+        ssl_MapLowLevelError(SSL_ERROR_CLIENT_KEY_EXCHANGE_FAILURE);
+        return SECFailure;
+    }
+
+    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    PK11_FreeSymKey(pms);
+    if (rv != SECSuccess) {
+        SEND_ALERT
+        return SECFailure; /* error code set by ssl3_InitPendingCipherSpec */
+    }
+    return SECSuccess;
+}
+
 SECStatus
 tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 {
@@ -507,10 +560,26 @@ tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
         return SECFailure;
     }
 
-    /* From here on it's like TLS 1.2 and below */
-    rv = ssl3_HandleECDHClientKeyExchange(ss, b, length,
-                                          ss->ephemeralECDHKeyPair->pubKey,
-                                          ss->ephemeralECDHKeyPair->privKey);
+    rv = tls13_HandleECDHKeyShare(ss, b, length,
+                                  ss->ephemeralECDHKeyPair->pubKey,
+                                  ss->ephemeralECDHKeyPair->privKey);
+    return rv;
+}
+
+
+SECStatus
+tls13_HandleECDHServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
+{
+    ECName             curve;
+    SECStatus          rv;
+
+    PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
+    PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+
+    rv = tls13_HandleECDHKeyShare(ss, b, length,
+                                  ss->ephemeralECDHKeyPair->pubKey,
+                                  ss->ephemeralECDHKeyPair->privKey);
     return rv;
 }
 
@@ -986,7 +1055,7 @@ tls13_SendECDHServerKeyShare(sslSocket *ss)
     PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
 
     rv = ssl3_AppendHandshakeHeader(ss, server_key_share,
-                                    ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len + 1);
+                                    ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len + 2);
     if (rv != SECSuccess) {
         goto loser;     /* err set by ssl3_AppendHandshake* */
     }
@@ -994,7 +1063,7 @@ tls13_SendECDHServerKeyShare(sslSocket *ss)
     rv = ssl3_AppendHandshakeVariable(ss,
                                       ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.data,
                                       ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len,
-                                      1);
+                                      2);
     if (rv != SECSuccess) {
         goto loser;     /* err set by AppendHandshake. */
     }

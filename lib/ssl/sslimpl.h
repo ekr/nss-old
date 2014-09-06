@@ -773,6 +773,7 @@ typedef enum {
     wait_hello_done,
     wait_new_session_ticket,
     wait_client_key_share,
+    wait_server_key_share,
     idle_handshake
 } SSL3WaitState;
 
@@ -1731,6 +1732,8 @@ extern SECStatus ssl3_SendECDHServerKeyExchange(sslSocket *ss,
 			const SSL3SignatureAndHashAlgorithm *sigAndHash);
 SECStatus
 tls13_SendECDHServerKeyShare(sslSocket *ss);
+SECStatus
+tls13_HandleECDHServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length);
 extern SECStatus tls13_PreEncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve,
   PRUint32* length);
 extern SECStatus tls13_EncodeECDHEClientKeyShareForGroup(sslSocket *ss, ECName ec_curve);
