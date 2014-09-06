@@ -7552,9 +7552,12 @@ ssl3_SendClientSecondRound(sslSocket *ss)
 {
     SECStatus rv;
     PRBool sendClientCert;
+    PRBool isTLS13;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
+
+    isTLS13 = ss->version >= SSL_LIBRARY_VERSION_TLS_1_3;
 
     sendClientCert = !ss->ssl3.sendEmptyCert &&
 		     ss->ssl3.clientCertChain  != NULL &&
@@ -7598,7 +7601,7 @@ ssl3_SendClientSecondRound(sslSocket *ss)
 	return SECFailure;
     }
     if (ss->ssl3.hs.authCertificatePending &&
-	(sendClientCert || ss->ssl3.sendEmptyCert || ss->firstHsDone)) {
+	(sendClientCert || ss->ssl3.sendEmptyCert || ss->firstHsDone || isTLS13)) {
 	SSL_TRC(3, ("%d: SSL3[%p]: deferring ssl3_SendClientSecondRound because"
 		    " certificate authentication is still pending.",
 		    SSL_GETPID(), ss->fd));
@@ -7607,6 +7610,13 @@ ssl3_SendClientSecondRound(sslSocket *ss)
     }
 
     ssl_GetXmitBufLock(ss);		/*******************************/
+
+    if (isTLS13) {
+        rv = ssl3_SendChangeCipherSpecs(ss);
+        if (rv != SECSuccess) {
+            goto loser;	/* err code was set. */
+        }
+    }
 
     if (ss->ssl3.sendEmptyCert) {
 	ss->ssl3.sendEmptyCert = PR_FALSE;
@@ -7622,9 +7632,12 @@ ssl3_SendClientSecondRound(sslSocket *ss)
     	}
     }
 
-    rv = ssl3_SendClientKeyExchange(ss);
-    if (rv != SECSuccess) {
-    	goto loser;	/* err is set. */
+    if (!isTLS13) {
+        /* Sent in first flight */
+        rv = ssl3_SendClientKeyExchange(ss);
+        if (rv != SECSuccess) {
+            goto loser;	/* err is set. */
+        }
     }
 
     if (sendClientCert) {
@@ -7636,9 +7649,12 @@ ssl3_SendClientSecondRound(sslSocket *ss)
         }
     }
 
-    rv = ssl3_SendChangeCipherSpecs(ss);
-    if (rv != SECSuccess) {
-	goto loser;	/* err code was set. */
+    if (!isTLS13) {
+        /* Sent above */
+        rv = ssl3_SendChangeCipherSpecs(ss);
+        if (rv != SECSuccess) {
+            goto loser;	/* err code was set. */
+        }
     }
 
     /* This must be done after we've set ss->ssl3.cwSpec in
@@ -7649,7 +7665,7 @@ ssl3_SendClientSecondRound(sslSocket *ss)
      */
     ss->enoughFirstHsDone = PR_TRUE;
 
-    if (!ss->firstHsDone) {
+    if (!isTLS13 && !ss->firstHsDone) {
 	/* XXX: If the server's certificate hasn't been authenticated by this
 	 * point, then we may be leaking this NPN message to an attacker.
 	 */
@@ -11045,6 +11061,7 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     SECStatus         rv           = SECSuccess;
     PRBool            isServer     = ss->sec.isServer;
     PRBool            isTLS;
+    PRBool            isTLS13;
     SSL3KEAType       effectiveExchKeyType;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
@@ -11060,6 +11077,8 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     }
 
     isTLS = (PRBool)(ss->ssl3.crSpec->version > SSL_LIBRARY_VERSION_3_0);
+    isTLS13 = (PRBool)(ss->ssl3.crSpec->version >= SSL_LIBRARY_VERSION_TLS_1_3);
+
     if (isTLS) {
 	TLSFinished tlsFinished;
 
@@ -11104,7 +11123,8 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     ssl_GetXmitBufLock(ss);	/*************************************/
 
     if ((isServer && !ss->ssl3.hs.isResuming) ||
-	(!isServer && ss->ssl3.hs.isResuming)) {
+	(!isServer && ss->ssl3.hs.isResuming) ||
+        (!isServer && isTLS13)) {
 	PRInt32 flags = 0;
 
 	/* Send a NewSessionTicket message if the client sent us
@@ -11126,34 +11146,41 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
 	    }
 	}
 
-	rv = ssl3_SendChangeCipherSpecs(ss);
-	if (rv != SECSuccess) {
-	    goto xmit_loser;	/* err is set. */
-	}
-	/* If this thread is in SSL_SecureSend (trying to write some data) 
-	** then set the ssl_SEND_FLAG_FORCE_INTO_BUFFER flag, so that the 
-	** last two handshake messages (change cipher spec and finished) 
-	** will be sent in the same send/write call as the application data.
-	*/
-	if (ss->writerThread == PR_GetCurrentThread()) {
-	    flags = ssl_SEND_FLAG_FORCE_INTO_BUFFER;
-	}
+        if (isTLS13) {
+            rv = ssl3_SendClientSecondRound(ss);
+            if (rv != SECSuccess) {
+                goto xmit_loser;	/* err is set. */
+            }
+        } else {
+            rv = ssl3_SendChangeCipherSpecs(ss);
+            if (rv != SECSuccess) {
+                goto xmit_loser;	/* err is set. */
+            }
+            /* If this thread is in SSL_SecureSend (trying to write some data) 
+            ** then set the ssl_SEND_FLAG_FORCE_INTO_BUFFER flag, so that the 
+            ** last two handshake messages (change cipher spec and finished) 
+            ** will be sent in the same send/write call as the application data.
+            */
+            if (ss->writerThread == PR_GetCurrentThread()) {
+                flags = ssl_SEND_FLAG_FORCE_INTO_BUFFER;
+            }
 
-	if (!isServer && !ss->firstHsDone) {
-	    rv = ssl3_SendNextProto(ss);
-	    if (rv != SECSuccess) {
-		goto xmit_loser; /* err code was set. */
-	    }
-	}
+            if (!isServer && !ss->firstHsDone) {
+                rv = ssl3_SendNextProto(ss);
+                if (rv != SECSuccess) {
+                    goto xmit_loser; /* err code was set. */
+                }
+            }
 
-	if (IS_DTLS(ss)) {
-	    flags |= ssl_SEND_FLAG_NO_RETRANSMIT;
-	}
+            if (IS_DTLS(ss)) {
+                flags |= ssl_SEND_FLAG_NO_RETRANSMIT;
+            }
 
-	rv = ssl3_SendFinished(ss, flags);
-	if (rv != SECSuccess) {
-	    goto xmit_loser;	/* err is set. */
-	}
+            rv = ssl3_SendFinished(ss, flags);
+            if (rv != SECSuccess) {
+                goto xmit_loser;	/* err is set. */
+            }
+        }
     }
 
 xmit_loser:
@@ -11213,6 +11240,11 @@ xmit_loser:
     }
 
     if (ss->ssl3.hs.authCertificatePending) {
+        /* In TLS 1.3 ssl3_SendClientSecondRound() aborts with
+         * SECWouldBlock if ss->ssl3.hs.authCertificatePending is PR_TRUE
+         */
+        PORT_Assert(!isTLS13);
+
 	if (ss->ssl3.hs.restartTarget) {
 	    PR_NOT_REACHED("ssl3_HandleFinished: unexpected restartTarget");
 	    PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
