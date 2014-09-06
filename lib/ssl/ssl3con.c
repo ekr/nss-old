@@ -3567,7 +3567,12 @@ ssl3_HandleChangeCipherSpecs(sslSocket *ss, sslBuffer *buf)
     if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
         ss->ssl3.hs.ws   = wait_finished;
     } else {
-        ss->ssl3.hs.ws   = wait_server_cert;
+        if (!ss->sec.isServer) {
+            ss->ssl3.hs.ws   = wait_server_cert;
+        } else {
+            ss->ssl3.hs.ws = ss->opt.requestCertificate ?
+                    wait_client_cert : wait_finished;
+        }
     }
 
     SSL_TRC(3, ("%d: SSL3[%d] Set Current Read Cipher Suite to Pending",
@@ -7968,8 +7973,8 @@ tls13_SendServerHelloSequence(sslSocket *ss)
 	return rv;	/* error code is set. */
     }
 
-    ss->ssl3.hs.ws = (ss->opt.requestCertificate) ? wait_client_cert
-                                               : wait_finished;
+    ss->ssl3.hs.ws = wait_change_cipher;
+
     return SECSuccess;
 }
 
@@ -11063,6 +11068,7 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     PRBool            isTLS;
     PRBool            isTLS13;
     SSL3KEAType       effectiveExchKeyType;
+    PRBool            needToSendFinished;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
@@ -11122,9 +11128,15 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
 
     ssl_GetXmitBufLock(ss);	/*************************************/
 
-    if ((isServer && !ss->ssl3.hs.isResuming) ||
-	(!isServer && ss->ssl3.hs.isResuming) ||
-        (!isServer && isTLS13)) {
+    if (isTLS13) {
+        needToSendFinished = !ss->sec.isServer;
+    } else {
+        needToSendFinished =
+                (isServer && !ss->ssl3.hs.isResuming) ||
+                (!isServer && ss->ssl3.hs.isResuming);
+    }
+
+    if (needToSendFinished) {
 	PRInt32 flags = 0;
 
 	/* Send a NewSessionTicket message if the client sent us
