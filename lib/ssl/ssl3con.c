@@ -4110,14 +4110,6 @@ ssl3_UpdateHandshakeHashes(sslSocket *ss, const unsigned char *b,
 	return sslBuffer_Append(&ss->ssl3.hs.messages, b, l);
     }
 
-    // TODO(ekr@rtfm.com): delete
-    {
-        char label[200];
-        snprintf(label, sizeof(label), "EKR: Hash: %s",
-                 ss->sec.isServer ? "server" : "client");
-        PRINT_BUF(1, (NULL, label, b, l));
-    }
-
     PRINT_BUF(90, (NULL, "handshake hash input:", b, l));
 
 #ifndef NO_PKCS11_BYPASS
