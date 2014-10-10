@@ -2630,6 +2630,7 @@ ssl3_ClientSendEarlyHandshakeXtn(sslSocket *ss, PRBool append,
     unsigned char hdr[DTLS_RECORD_HEADER_LENGTH];
     PRInt32 hdr_len;
 
+    PORT_Assert(!IS_DTLS(ss)); // TODO(ekr@rtfm.com): We don't support DTLS yet.
     if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
         return 0;
     }
