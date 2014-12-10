@@ -572,10 +572,25 @@ tls13_HandleECDHServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 {
     ECName             curve;
     SECStatus          rv;
+    PRInt32 group;
+    ECName expectedGroup;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
 
+    group = ssl3_ConsumeHandshakeNumber(ss, 2, &b, &length);
+    if (group < 0) {
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_SERVER_KEY_SHARE);
+        return SECFailure;
+    }
+
+    /* TODO(ekr@rtfm.com): Currently we just expect a single group
+       which is the one we offered */
+    expectedGroup = params2ecName(&ss->ephemeralECDHKeyPair->pubKey->u.ec.DEREncodedParams);
+    if (expectedGroup != group) {
+        PORT_SetError(SSL_ERROR_RX_MALFORMED_SERVER_KEY_SHARE);
+        return SECFailure;
+    }
 
     rv = tls13_HandleECDHKeyShare(ss, b, length,
                                   ss->ephemeralECDHKeyPair->pubKey,
@@ -1050,12 +1065,19 @@ SECStatus
 tls13_SendECDHServerKeyShare(sslSocket *ss)
 {
     SECStatus rv;
+    ECName group;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss));
 
     rv = ssl3_AppendHandshakeHeader(ss, server_key_share,
-                                    ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len + 2);
+                                    ss->ephemeralECDHKeyPair->pubKey->u.ec.publicValue.len + 2 + 2);
+    if (rv != SECSuccess) {
+        goto loser;     /* err set by ssl3_AppendHandshake* */
+    }
+
+    group = params2ecName(&ss->ephemeralECDHKeyPair->pubKey->u.ec.DEREncodedParams);
+    rv = ssl3_AppendHandshakeNumber(ss, group, 2);
     if (rv != SECSuccess) {
         goto loser;     /* err set by ssl3_AppendHandshake* */
     }

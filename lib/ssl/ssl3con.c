@@ -5530,6 +5530,16 @@ tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
     return tocpy;
 }
 
+/*
+ *     struct {
+ *         NamedGroup group;
+ *         opaque key_exchange<1..2^16-1>;
+ *     } ClientKeyShareOffer;
+ *
+ *     struct {
+ *         ClientKeyShareOffer offers<0..2^16-1>;
+ *     } ClientKeyShare;
+*/
 static SECStatus
 tls13_SendClientKeyShare(sslSocket *ss)
 {
@@ -9882,7 +9892,7 @@ skip:
 static SECStatus
 tls13_HandleClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 {
-    PRInt32 expectedGroup;
+    ECName expectedGroup;
     SSL3AlertDescription desc = unexpected_message;
     SECStatus rv;
     PRBool found = PR_FALSE;
