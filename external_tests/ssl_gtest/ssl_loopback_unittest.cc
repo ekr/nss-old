@@ -906,9 +906,12 @@ TEST_P(TlsConnectGeneric, ConnectWithCompression)
   ASSERT_TRUE(client_->is_compressed());
 }
 
+#define SKIP_DTLS() if (mode_ != STREAM) return
+
 #ifdef NSS_ENABLE_TLS_1_3
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_Only)
 {
+  SKIP_DTLS();
   EnsureTlsSetup();
   EnableSomeECDHECiphers();
   client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
@@ -921,6 +924,7 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_Only)
 
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnly)
 {
+  SKIP_DTLS();
   EnsureTlsSetup();
   EnableSomeECDHECiphers();
   client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
@@ -933,6 +937,7 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnly)
 
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnlyMismatch)
 {
+  SKIP_DTLS();
   EnsureTlsSetup();
   // Only enable ECDHE on server.
   server_->EnableSomeECDHECiphers();
@@ -947,6 +952,7 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_ServerOnlyMismatch)
 
 TEST_P(TlsConnectGeneric, ConnectTLS_1_3_WithCompressionOn)
 {
+  SKIP_DTLS();
   EnsureTlsSetup();
   EnableSomeECDHECiphers();
   client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
