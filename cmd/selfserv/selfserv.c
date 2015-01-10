@@ -821,6 +821,8 @@ PRBool testbypass      = PR_FALSE;
 PRBool enableSessionTickets = PR_FALSE;
 PRBool enableCompression    = PR_FALSE;
 PRBool failedToNegotiateName  = PR_FALSE;
+PRBool enableExtendedMasterSecret = PR_FALSE;
+
 static char  *virtServerNameArray[MAX_VIRT_SERVER_NAME_ARRAY_INDEX];
 static int                  virtServerNameIndex = 1;
 
@@ -1905,6 +1907,16 @@ server_main(
         }
     }
 
+    if  (enableExtendedMasterSecret) {
+        rv = SSL_OptionSet(model_sock, SSL_ENABLE_EXTENDED_MASTER_SECRET, PR_TRUE);
+	if (rv != SECSuccess) {
+	    errExit("error enabling extended master secret ");
+	}
+        rv = SSL_CipherPrefSet(model_sock, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, PR_TRUE);
+	if (rv != SECSuccess) {
+	    errExit("error enabling extended master secret ");
+	}
+    }
     for (kea = kt_rsa; kea < kt_kea_size; kea++) {
 	if (cert[kea] != NULL) {
 	    secStatus = SSL_ConfigSecureServer(model_sock, 
@@ -2180,7 +2192,7 @@ main(int argc, char **argv)
     ** numbers, then capital letters, then lower case, alphabetical. 
     */
     optstate = PL_CreateOptState(argc, argv, 
-        "2:A:BC:DEL:M:NP:RT:V:Ya:bc:d:e:f:g:hi:jk:lmn:op:qrst:uvw:xyz");
+        "2:A:BC:DEL:M:NP:RST:V:Ya:bc:d:e:f:g:hi:jk:lmn:op:qrst:uvw:xyz");
     while ((status = PL_GetNextOpt(optstate)) == PL_OPT_OK) {
 	++optionsFound;
 	switch(optstate->option) {
@@ -2216,6 +2228,8 @@ main(int argc, char **argv)
 	case 'N': NoReuse = PR_TRUE; break;
 
 	case 'R': disableRollBack = PR_TRUE; break;
+
+        case 'S': enableExtendedMasterSecret = PR_TRUE; break;
 
 	case 'T':
 	    if (enableOCSPStapling(optstate->value) != SECSuccess) {

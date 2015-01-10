@@ -62,6 +62,7 @@ SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
 	    ssl_ReleaseSpecReadLock(ss);
 	    inf.compressionMethodName =
 		ssl_GetCompressionMethodName(inf.compressionMethod);
+            inf.extendedMasterSecretUsed = ss->ssl3.hs.extendedMasterSecretUsed;
 	}
 	if (sid) {
 	    inf.creationTime   = sid->creationTime;
