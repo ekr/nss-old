@@ -82,7 +82,8 @@ static sslOptions ssl_defaults = {
     PR_TRUE,    /* enableNPN          */
     PR_FALSE,   /* enableALPN         */
     PR_TRUE,    /* reuseServerECDHEKey */
-    PR_FALSE    /* enableFallbackSCSV */
+    PR_FALSE,   /* enableFallbackSCSV */
+    PR_FALSE    /* enableEtendedMS    */
 };
 
 /*
@@ -794,6 +795,10 @@ SSL_OptionSet(PRFileDesc *fd, PRInt32 which, PRBool on)
         ss->opt.enableFallbackSCSV = on;
         break;
 
+      case SSL_ENABLE_EXTENDED_MASTER_SECRET:
+        ss->opt.enableExtendedMS = on;
+        break;
+
       default:
         PORT_SetError(SEC_ERROR_INVALID_ARGS);
         rv = SECFailure;
@@ -869,6 +874,8 @@ SSL_OptionGet(PRFileDesc *fd, PRInt32 which, PRBool *pOn)
     case SSL_REUSE_SERVER_ECDHE_KEY:
                                   on = ss->opt.reuseServerECDHEKey; break;
     case SSL_ENABLE_FALLBACK_SCSV: on = ss->opt.enableFallbackSCSV; break;
+    case SSL_ENABLE_EXTENDED_MASTER_SECRET:
+                                  on = ss->opt.enableExtendedMS; break;
 
     default:
         PORT_SetError(SEC_ERROR_INVALID_ARGS);
@@ -937,6 +944,9 @@ SSL_OptionGetDefault(PRInt32 which, PRBool *pOn)
        break;
     case SSL_ENABLE_FALLBACK_SCSV:
        on = ssl_defaults.enableFallbackSCSV;
+       break;
+    case SSL_ENABLE_EXTENDED_MASTER_SECRET:
+       on = ssl_defaults.enableExtendedMS;
        break;
 
     default:
@@ -1119,6 +1129,10 @@ SSL_OptionSetDefault(PRInt32 which, PRBool on)
 
       case SSL_ENABLE_FALLBACK_SCSV:
         ssl_defaults.enableFallbackSCSV = on;
+        break;
+
+      case SSL_ENABLE_EXTENDED_MASTER_SECRET:
+        ssl_defaults.enableExtendedMS = on;
         break;
 
       default:

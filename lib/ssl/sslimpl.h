@@ -328,6 +328,7 @@ typedef struct sslOptionsStr {
     unsigned int enableALPN             : 1;  /* 27 */
     unsigned int reuseServerECDHEKey    : 1;  /* 28 */
     unsigned int enableFallbackSCSV     : 1;  /* 29 */
+    unsigned int enableExtendedMS       : 1;  /* 30 */
 } sslOptions;
 
 typedef enum { sslHandshakingUndetermined = 0,
@@ -690,6 +691,8 @@ struct sslSessionIDStr {
 
 	    SECItem           srvName;
 
+            PRBool            extendedMasterSecretUsed;
+
 	    /* This lock is lazily initialized by CacheSID when a sid is first
 	     * cached. Before then, there is no need to lock anything because
 	     * the sid isn't being shared by anything.
@@ -907,6 +910,9 @@ const ssl3CipherSuiteDef *suite_def;
     SSL3SignatureAndHashAlgorithm *clientSigAndHash;
     unsigned int          numClientSigAndHash;
 
+    /* Was the session hash extension [draft-ietf-tls-session-hash] used? */
+    PRBool                extendedMasterSecretUsed;
+
     /* This group of values is used for DTLS */
     PRUint16              sendMessageSeq;  /* The sending message sequence
 					    * number */
@@ -1034,6 +1040,7 @@ typedef struct SessionTicketStr {
     SECItem               peer_cert;
     PRUint32              timestamp;
     SECItem               srvName; /* negotiated server name */
+    PRBool                extendedMasterSecretUsed;
 }  SessionTicket;
 
 /*
