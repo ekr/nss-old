@@ -422,3 +422,6 @@ ER3(SSL_ERROR_NEXT_PROTOCOL_NO_PROTOCOL, (SSL_ERROR_BASE + 130),
 ER3(SSL_ERROR_INAPPROPRIATE_FALLBACK_ALERT, (SSL_ERROR_BASE + 131),
 "The server rejected the handshake because the client downgraded to a lower "
 "TLS version than the server supports.")
+
+ER3(SSL_ERROR_RESUMPTION_WITHOUT_EXTENDED_MASTER_SECRET, (SSL_ERROR_BASE + 132),
+    "The peer tried to resume without a correct extended_master_secret extension")

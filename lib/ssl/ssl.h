@@ -191,6 +191,9 @@ SSL_IMPORT PRFileDesc *DTLS_ImportFD(PRFileDesc *model, PRFileDesc *fd);
 #define SSL_ENABLE_FALLBACK_SCSV       28 /* Send fallback SCSV in
                                            * handshakes. */
 
+/* Use draft-ietf-tls-session-hash; disabled by default. */
+#define SSL_ENABLE_EXTENDED_MASTER_SECRET 29
+
 #ifdef SSL_DEPRECATED_FUNCTION 
 /* Old deprecated function names */
 SSL_IMPORT SECStatus SSL_Enable(PRFileDesc *fd, int option, PRBool on);

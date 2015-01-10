@@ -314,6 +314,8 @@ class TlsAgent : public PollTarget {
   }
 
   void SetVersionRange(uint16_t minver, uint16_t maxver) {
+    ASSERT_TRUE(EnsureTlsSetup());
+
     SSLVersionRange range = {minver, maxver};
     ASSERT_EQ(SECSuccess, SSL_VersionRangeSet(ssl_fd_, &range));
   }
@@ -412,6 +414,27 @@ class TlsAgent : public PollTarget {
     ASSERT_EQ(SECSuccess, rv);
   }
 
+  void EnableExtendedMasterSecret() {
+    ASSERT_TRUE(EnsureTlsSetup());
+
+    // TODO(ekr@rtfm.com): Temporary. Remove when we have session hash for
+    // other versions.
+    SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
+                    SSL_LIBRARY_VERSION_TLS_1_2);
+
+    SECStatus rv = SSL_OptionSet(ssl_fd_,
+                                 SSL_ENABLE_EXTENDED_MASTER_SECRET,
+                                 PR_TRUE);
+
+    ASSERT_EQ(SECSuccess, rv);
+  }
+
+  void CheckExtendedMasterSecret(bool expected) {
+    std::cerr << "Checking extended master secret for " << name_ << " expected=" << expected << std::endl;
+    ASSERT_EQ(expected, info_.extendedMasterSecretUsed)
+        << "unexpected extended master secret state for " << name_;
+  }
+
  private:
   const static char* states[];
 
@@ -457,7 +480,9 @@ class TlsConnectTestBase : public ::testing::Test {
   TlsConnectTestBase(Mode mode)
       : mode_(mode),
         client_(new TlsAgent("client", TlsAgent::CLIENT, mode_)),
-        server_(new TlsAgent("server", TlsAgent::SERVER, mode_)) {}
+        server_(new TlsAgent("server", TlsAgent::SERVER, mode_)),
+        session_ids_(),
+        expect_extended_master_secret_(false) {}
 
   ~TlsConnectTestBase() {
     delete client_;
@@ -476,6 +501,7 @@ class TlsConnectTestBase : public ::testing::Test {
   }
 
   void TearDown() {
+
     client_ = nullptr;
     server_ = nullptr;
 
@@ -506,15 +532,20 @@ class TlsConnectTestBase : public ::testing::Test {
     ASSERT_TRUE(server_->EnsureTlsSetup());
   }
 
-  void Connect() {
+  void ConnectInt() {
     server_->StartConnect();  // Server
     client_->StartConnect();  // Client
     client_->Handshake();
     server_->Handshake();
 
-    ASSERT_TRUE_WAIT(client_->state() != TlsAgent::CONNECTING &&
-                         server_->state() != TlsAgent::CONNECTING,
+    ASSERT_TRUE_WAIT((client_->state() != TlsAgent::CONNECTING) &&
+                     (server_->state() != TlsAgent::CONNECTING),
                      5000);
+  }
+
+  void Connect() {
+    ConnectInt();
+    ASSERT_EQ(TlsAgent::CONNECTED, client_->state());
     ASSERT_EQ(TlsAgent::CONNECTED, server_->state());
 
     int16_t cipher_suite1, cipher_suite2;
@@ -534,6 +565,15 @@ class TlsConnectTestBase : public ::testing::Test {
     ASSERT_EQ(32, sid_s1.size());
     ASSERT_EQ(sid_c1, sid_s1);
     session_ids_.push_back(sid_c1);
+
+    // Check whether the extended master secret extension was negotiated.
+    CheckExtendedMasterSecret();
+  }
+
+  void ConnectExpectFail() {
+    ConnectInt();
+    ASSERT_EQ(TlsAgent::ERROR, client_->state());
+    ASSERT_EQ(TlsAgent::ERROR, server_->state());
   }
 
   void EnableSomeECDHECiphers() {
@@ -568,11 +608,22 @@ class TlsConnectTestBase : public ::testing::Test {
     }
   }
 
+  void ExpectExtendedMasterSecret(bool expected) {
+    expect_extended_master_secret_ = expected;
+  }
+
  protected:
+  void CheckExtendedMasterSecret() {
+    client_->CheckExtendedMasterSecret(expect_extended_master_secret_);
+    server_->CheckExtendedMasterSecret(expect_extended_master_secret_);
+  }
+
+
   Mode mode_;
   TlsAgent* client_;
   TlsAgent* server_;
   std::vector<std::vector<uint8_t>> session_ids_;
+  bool expect_extended_master_secret_;
 };
 
 class TlsConnectTest : public TlsConnectTestBase {
@@ -705,6 +756,96 @@ TEST_P(TlsConnectGeneric, ConnectClientNoneServerBoth) {
   Connect();
   CheckResumption(RESUME_NONE);
 }
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecret) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_SESSIONID);
+}
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretECDHE) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  EnableSomeECDHECiphers();
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  EnableSomeECDHECiphers();
+  Connect();
+  CheckResumption(RESUME_SESSIONID);
+}
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretTicket) {
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_TICKET);
+}
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretClientOnly) {
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
+                    SSL_LIBRARY_VERSION_TLS_1_2);
+  server_->EnableSomeECDHECiphers();
+
+  client_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(false);
+  Connect();
+}
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretServerOnly) {
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
+                    SSL_LIBRARY_VERSION_TLS_1_2);
+  client_->EnableSomeECDHECiphers();
+
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(false);
+  Connect();
+}
+
+TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretResumeWithout) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  server_->EnableExtendedMasterSecret();
+  ConnectExpectFail();
+}
+
+TEST_P(TlsConnectGeneric, ConnectNormalResumeWithExtendedMasterSecret) {
+  ExpectExtendedMasterSecret(false);
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_NONE);
+}
+
 
 TEST_P(TlsConnectGeneric, ConnectTLS_1_1_Only) {
   EnsureTlsSetup();
