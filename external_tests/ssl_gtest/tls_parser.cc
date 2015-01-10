@@ -42,6 +42,15 @@ bool TlsRecordParser::NextRecord(uint8_t* ct,
   const uint8_t* ctp = reinterpret_cast<const uint8_t*>(ptr());
   consume(3);  // ct + version
 
+  bool is_dtls = false;
+  if (ctp[1] != 3) {
+    // Looks like DTLS, or at least not TLS, so strip off the sequence
+    CHECK_LENGTH(8U);
+    consume(8U);
+    is_dtls = true;
+  }
+
+  CHECK_LENGTH(2U);
   const uint16_t* tmp = reinterpret_cast<const uint16_t*>(ptr());
   size_t length = ntohs(*tmp);
   consume(2);

@@ -1,234 +1,8 @@
-#include "prio.h"
-#include "prerror.h"
-#include "prlog.h"
-#include "pk11func.h"
-#include "ssl.h"
-#include "sslerr.h"
-#include "sslproto.h"
-#include "keyhi.h"
-
-#include <memory>
-
-#include "test_io.h"
-#include "tls_parser.h"
-
-#define GTEST_HAS_RTTI 0
-#include "gtest/gtest.h"
-#include "gtest_utils.h"
-
-extern std::string g_working_dir_path;
-
-namespace nss_test {
-
-enum SessionResumptionMode {
-  RESUME_NONE = 0,
-  RESUME_SESSIONID = 1,
-  RESUME_TICKET = 2,
-  RESUME_BOTH = RESUME_SESSIONID | RESUME_TICKET
-};
-
-#define LOG(a) std::cerr << name_ << ": " << a << std::endl;
-
-// Inspector that parses out DTLS records and passes
-// them on.
-class TlsRecordInspector : public Inspector {
- public:
-  virtual void Inspect(DummyPrSocket* adapter, const void* data, size_t len) {
-    TlsRecordParser parser(static_cast<const unsigned char*>(data), len);
-
-    uint8_t content_type;
-    std::auto_ptr<DataBuffer> buf;
-    while (parser.NextRecord(&content_type, &buf)) {
-      OnRecord(adapter, content_type, buf->data(), buf->len());
-    }
-  }
-
-  virtual void OnRecord(DummyPrSocket* adapter, uint8_t content_type,
-                        const unsigned char* record, size_t len) = 0;
-};
-
-// Inspector that injects arbitrary packets based on
-// DTLS records of various types.
-class TlsInspectorInjector : public TlsRecordInspector {
- public:
-  TlsInspectorInjector(uint8_t packet_type, uint8_t handshake_type,
-                       const unsigned char* data, size_t len)
-      : packet_type_(packet_type),
-        handshake_type_(handshake_type),
-        injected_(false),
-        data_(data, len) {}
-
-  virtual void OnRecord(DummyPrSocket* adapter, uint8_t content_type,
-                        const unsigned char* data, size_t len) {
-    // Only inject once.
-    if (injected_) {
-      return;
+    LOG("~TlsAgent()");
+    if (adapter_) {
+      Poller::Instance()->Cancel(READABLE_EVENT, adapter_);
     }
 
-    // Check that the first byte is as requested.
-    if (content_type != packet_type_) {
-      return;
-    }
-
-    if (handshake_type_ != 0xff) {
-      // Check that the packet is plausibly long enough.
-      if (len < 1) {
-        return;
-      }
-
-      // Check that the handshake type is as requested.
-      if (data[0] != handshake_type_) {
-        return;
-      }
-    }
-
-    adapter->WriteDirect(data_.data(), data_.len());
-  }
-
- private:
-  uint8_t packet_type_;
-  uint8_t handshake_type_;
-  bool injected_;
-  DataBuffer data_;
-};
-
-// Make a copy of the first instance of a message.
-class TlsInspectorRecordHandshakeMessage : public TlsRecordInspector {
- public:
-  TlsInspectorRecordHandshakeMessage(uint8_t handshake_type)
-      : handshake_type_(handshake_type), buffer_() {}
-
-  virtual void OnRecord(DummyPrSocket* adapter, uint8_t content_type,
-                        const unsigned char* data, size_t len) {
-    // Only do this once.
-    if (buffer_.len()) {
-      return;
-    }
-
-    // Check that the first byte is as requested.
-    if (content_type != kTlsHandshakeType) {
-      return;
-    }
-
-    TlsParser parser(data, len);
-    while (parser.remaining()) {
-      unsigned char message_type;
-      // Read the content type.
-      if (!parser.Read(&message_type)) {
-        // Malformed.
-        return;
-      }
-
-      // Read the record length.
-      uint32_t length;
-      if (!parser.Read(&length, 3)) {
-        // Malformed.
-        return;
-      }
-
-      if (adapter->mode() == DGRAM) {
-        // DTLS
-        uint32_t message_seq;
-        if (!parser.Read(&message_seq, 2)) {
-          return;
-        }
-
-        uint32_t fragment_offset;
-        if (!parser.Read(&fragment_offset, 3)) {
-          return;
-        }
-
-        uint32_t fragment_length;
-        if (!parser.Read(&fragment_length, 3)) {
-          return;
-        }
-
-        if ((fragment_offset != 0) || (fragment_length != length)) {
-          // This shouldn't happen because all current tests where we
-          // are using this code don't fragment.
-          return;
-        }
-      }
-
-      unsigned char* dest = nullptr;
-
-      if (message_type == handshake_type_) {
-        buffer_.Allocate(length);
-        dest = buffer_.data();
-      }
-
-      if (!parser.Read(dest, length)) {
-        // Malformed
-        return;
-      }
-
-      if (dest) return;
-    }
-  }
-
-  const DataBuffer& buffer() { return buffer_; }
-
- private:
-  uint8_t handshake_type_;
-  DataBuffer buffer_;
-};
-
-class TlsServerKeyExchangeECDHE {
- public:
-  bool Parse(const unsigned char* data, size_t len) {
-    TlsParser parser(data, len);
-
-    uint8_t curve_type;
-    if (!parser.Read(&curve_type)) {
-      return false;
-    }
-
-    if (curve_type != 3) {  // named_curve
-      return false;
-    }
-
-    uint32_t named_curve;
-    if (!parser.Read(&named_curve, 2)) {
-      return false;
-    }
-
-    uint32_t point_length;
-    if (!parser.Read(&point_length, 1)) {
-      return false;
-    }
-
-    public_key_.Allocate(point_length);
-    if (!parser.Read(public_key_.data(), point_length)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  DataBuffer public_key_;
-};
-
-class TlsAgent : public PollTarget {
- public:
-  enum Role { CLIENT, SERVER };
-  enum State { INIT, CONNECTING, CONNECTED, ERROR };
-
-  TlsAgent(const std::string& name, Role role, Mode mode)
-      : name_(name),
-        mode_(mode),
-        pr_fd_(nullptr),
-        adapter_(nullptr),
-        ssl_fd_(nullptr),
-        role_(role),
-        state_(INIT),
-        err_code_(0),
-        send_ctr_(0),
-        recv_ctr_(0) {
-    memset(&info_, 0, sizeof(info_));
-    memset(&csinfo_, 0, sizeof(csinfo_));
-  }
-
-  ~TlsAgent() {
     if (pr_fd_) {
       PR_Close(pr_fd_);
     }
@@ -236,6 +10,9 @@ class TlsAgent : public PollTarget {
     if (ssl_fd_) {
       PR_Close(ssl_fd_);
     }
+
+    if (timer_)
+      timer_->Cancel();
   }
 
   bool Init() {
@@ -964,6 +741,7 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only) {
 }
 
 
+<<<<<<< HEAD
 // This succeeds even with TLS 1.3 enabled because we
 // don't default to having TLS 1.3 on.
 TEST_P(TlsConnectGeneric, ConnectWithCompression)
@@ -1036,6 +814,8 @@ TEST_P(TlsConnectGeneric, ConnectTLS_1_3_WithCompressionOn)
 }
 #endif
 
+=======
+>>>>>>> 8005466... Fix crasher and DTLS record detection
 TEST_F(TlsConnectTest, ConnectECDHE) {
   EnableSomeECDHECiphers();
   Connect();
