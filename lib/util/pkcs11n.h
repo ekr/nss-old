@@ -214,6 +214,9 @@
 #define CKM_NSS_TLS_KEY_AND_MAC_DERIVE_SHA256   (CKM_NSS + 23)
 #define CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256 (CKM_NSS + 24)
 
+/* A generic mechanism for deriving master secrets from the TLS PRF */
+#define CKM_NSS_TLS_MASTER_KEY_DERIVE_PRF (CKM_NSS + 25)
+
 /*
  * HISTORICAL:
  * Do not attempt to use these. They are only used by NETSCAPE's internal
@@ -316,6 +319,17 @@ typedef struct CK_NSS_HKDFParams {
     CK_BYTE_PTR pInfo;
     CK_ULONG ulInfoLen;
 } CK_NSS_HKDFParams;
+
+/*
+ * Mandatory parameter for the CKM_NSS_MASTER_KEY_DERIVE_PRF key derivation
+ * mechanism.  See RFC 5246.
+ */
+typedef struct CK_NSS_TLSPRFParams {
+  CK_BYTE_PTR pLabel;
+  CK_ULONG ulLabelLen;
+  CK_BYTE_PTR pSeed;
+  CK_ULONG ulSeedLen;
+} CK_NSS_TLSPRFParams;
 
 /*
  * Trust info

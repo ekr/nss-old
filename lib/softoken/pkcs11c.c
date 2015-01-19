@@ -5923,6 +5923,70 @@ CK_RV NSC_DeriveKey( CK_SESSION_HANDLE hSession,
     /*
      * generate the master secret 
      */
+    case CKM_NSS_TLS_MASTER_KEY_DERIVE_PRF:
+      {
+        CK_NSS_TLSPRFParams    *tls_prf_params;
+        SSL3RSAPreMasterSecret *rsa_pms;
+        SECStatus status;
+        SECItem pms    = { siBuffer, NULL, 0 };
+        SECItem seed   = { siBuffer, NULL, 0 };
+        SECItem master = { siBuffer, NULL, 0 };
+        char* label;
+
+        tls_prf_params = (CK_NSS_TLSPRFParams*) pMechanism->pParameter;
+
+        /* First do the consistency checks */
+        att2 = sftk_FindAttribute(sourceKey,CKA_KEY_TYPE);
+        if ((att2 == NULL) ||
+            (*(CK_KEY_TYPE *)att2->attrib.pValue != CKK_GENERIC_SECRET)) {
+          if (att2) sftk_FreeAttribute(att2);
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+        sftk_FreeAttribute(att2);
+        if (keyType != CKK_GENERIC_SECRET) {
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+        if ((keySize != 0) && (keySize != SSL3_MASTER_SECRET_LENGTH)) {
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+
+        /* Ensure that the label is null-terminated */
+        if (tls_prf_params->pLabel[tls_prf_params->ulLabelLen - 1] != '\0') {
+          crv = CKR_TEMPLATE_INCONSISTENT;
+        }
+
+        /* Do the key derivation */
+        pms.data    = (unsigned char*) att->attrib.pValue;
+        pms.len     =                  att->attrib.ulValueLen;
+        seed.data   = tls_prf_params->pSeed;
+        seed.len    = tls_prf_params->ulSeedLen;
+        master.data = key_block;
+        master.len  = SSL3_MASTER_SECRET_LENGTH;
+        label       = (char*) tls_prf_params->pLabel;
+
+        /* Only SHA-256 is supported right now */
+        status = TLS_P_hash(HASH_AlgSHA256, &pms, label, &seed,
+                            &master, isFIPS);
+
+        /* Store the results */
+        crv = sftk_forceAttribute(key, CKA_VALUE, key_block,
+                                  SSL3_MASTER_SECRET_LENGTH);
+        if (crv != CKR_OK) break;
+        keyType = CKK_GENERIC_SECRET;
+        crv = sftk_forceAttribute(key, CKA_KEY_TYPE, &keyType, sizeof(keyType));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_SIGN,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_VERIFY,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_DERIVE,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        break;
+      }
+
     case CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256:
     case CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256:
 	isSHA256 = PR_TRUE;
