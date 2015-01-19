@@ -16,6 +16,9 @@ class Timeout : public PollTarget {
     Poller::Instance()->SetTimer(timer_ms, this, &Timeout::ExpiredCallback,
                                  &handle_);
   }
+  ~Timeout() {
+    Cancel();
+  }
 
   static void ExpiredCallback(PollTarget* target, Event event) {
     Timeout* timeout = static_cast<Timeout*>(target);
