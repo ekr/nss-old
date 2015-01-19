@@ -376,6 +376,7 @@ const Constant _consts[] = {
 	mkEntry(CKM_TLS_PRE_MASTER_KEY_GEN, Mechanism),
 	mkEntry(CKM_TLS_MASTER_KEY_DERIVE, Mechanism),
 	mkEntry(CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256, Mechanism),
+	mkEntry(CKM_NSS_TLS_MASTER_KEY_DERIVE_PRF, Mechanism),
 	mkEntry(CKM_TLS_KEY_AND_MAC_DERIVE, Mechanism),
 	mkEntry(CKM_NSS_TLS_KEY_AND_MAC_DERIVE_SHA256, Mechanism),
 	mkEntry(CKM_TLS_MASTER_KEY_DERIVE_DH, Mechanism),
