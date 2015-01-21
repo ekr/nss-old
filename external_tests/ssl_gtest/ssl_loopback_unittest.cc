@@ -24,7 +24,8 @@ enum SessionResumptionMode {
   RESUME_NONE = 0,
   RESUME_SESSIONID = 1,
   RESUME_TICKET = 2,
-  RESUME_BOTH = 3 };
+  RESUME_BOTH = RESUME_SESSIONID | RESUME_TICKET
+};
 
 #define LOG(a) std::cerr << name_ << ": " << a << std::endl;
 
