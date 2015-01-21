@@ -329,6 +329,7 @@ typedef struct CK_NSS_TLSPRFParams {
   CK_ULONG ulLabelLen;
   CK_BYTE_PTR pSeed;
   CK_ULONG ulSeedLen;
+  CK_VERSION_PTR pVersion;
 } CK_NSS_TLSPRFParams;
 
 /*

@@ -5971,6 +5971,12 @@ CK_RV NSC_DeriveKey( CK_SESSION_HANDLE hSession,
         status = TLS_P_hash(HASH_AlgSHA256, &pms, label, &seed,
                             &master, isFIPS);
 
+        /* TODO(ekr@rtfm.com): Temporary: return version: HACK */
+        if (tls_prf_params->pVersion && pms.len == SSL3_MASTER_SECRET_LENGTH) {
+            tls_prf_params->pVersion->major = pms.data[0];
+            tls_prf_params->pVersion->minor = pms.data[1];
+        }
+
         /* Store the results */
         crv = sftk_forceAttribute(key, CKA_VALUE, key_block,
                                   SSL3_MASTER_SECRET_LENGTH);
