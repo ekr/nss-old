@@ -479,6 +479,7 @@ class TlsConnectTestBase : public ::testing::Test {
     client_ = nullptr;
     server_ = nullptr;
 
+    SSL_ClearSessionCache();
     SSL_ShutdownServerSessionIDCache();
   }
 
