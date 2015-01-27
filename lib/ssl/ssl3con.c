@@ -68,7 +68,7 @@ static SECStatus ssl3_ComputeHandshakeHashes(sslSocket *ss,
                                              ssl3CipherSpec *spec,
                                              SSL3Hashes *hashes,
                                              PRUint32 sender);
-
+static SECStatus tls13_UpdateCipherSpecs(sslSocket *ss, PRBool send);
 static SECStatus ssl3_FlushHandshakeMessages(sslSocket *ss, PRInt32 flags);
 static int       ssl3_OIDToTLSHashAlgorithm(SECOidTag oid);
 
@@ -3564,16 +3564,7 @@ ssl3_HandleChangeCipherSpecs(sslSocket *ss, sslBuffer *buf)
     ss->ssl3.prSpec  = ss->ssl3.crSpec;
     ss->ssl3.crSpec  = prSpec;
 
-    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_3) {
-        ss->ssl3.hs.ws   = wait_finished;
-    } else {
-        if (!ss->sec.isServer) {
-            ss->ssl3.hs.ws   = wait_server_cert;
-        } else {
-            ss->ssl3.hs.ws = ss->opt.requestCertificate ?
-                    wait_client_cert : wait_finished;
-        }
-    }
+    ss->ssl3.hs.ws   = wait_finished;
 
     SSL_TRC(3, ("%d: SSL3[%d] Set Current Read Cipher Suite to Pending",
 		SSL_GETPID(), ss->fd ));
@@ -5530,6 +5521,41 @@ tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
     return tocpy;
 }
 
+/* The TLS 1.3 model is currently much simpler than the TLS 1.2 model in
+   that you never have to send with one cipher spec and receive with
+   another, so we just init the cipher spec and then send it immediately.
+*/
+static SECStatus tls13_UpdateCipherSpecs(sslSocket *ss, PRBool send)
+{
+    SECStatus rv;
+    ssl3CipherSpec *  pSpec;
+
+    /* Flush out any old stuff in the handshake buffers */
+    if (send) {
+        rv = ssl3_FlushHandshake(ss, ssl_SEND_FLAG_FORCE_INTO_BUFFER);
+        if (rv != SECSuccess) {
+            return rv;	/* error code set by ssl3_FlushHandshake */
+        }
+    }
+
+    /* OK, we have the cipher specs set up, now we need to swap them */
+    /* swap the pending and current write specs. */
+    ssl_GetSpecWriteLock(ss);	/**************************************/
+    pSpec                     = ss->ssl3.pwSpec;
+    ss->ssl3.pwSpec = ss->ssl3.cwSpec;
+    ss->ssl3.prSpec = ss->ssl3.crSpec;
+    ss->ssl3.cwSpec = ss->ssl3.crSpec = pSpec;
+
+    /* Currently we just free the old cipher specs, but in future when
+       we do DTLS we will need to be smarter in order to handle 
+       retransmits */
+    PORT_Assert(!IS_DTLS(ss));
+    ssl3_DestroyCipherSpec(ss->ssl3.pwSpec, PR_FALSE/*freeSrvName*/);
+
+    ssl_ReleaseSpecWriteLock(ss); /**************************************/
+
+    return SECSuccess;
+}
 /*
  *     struct {
  *         NamedGroup group;
@@ -7147,7 +7173,14 @@ tls13_HandleServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
         goto alert_loser;
     }
 
-    ss->ssl3.hs.ws = wait_change_cipher;
+    rv = tls13_UpdateCipherSpecs(ss, PR_FALSE);
+    if (rv != SECSuccess) {
+        desc     = internal_error;
+        errCode  = SSL_ERROR_INIT_CIPHER_SUITE_FAILURE;
+        goto alert_loser;
+    }
+
+    ss->ssl3.hs.ws = wait_server_cert;
     return SECSuccess;
 
 alert_loser:
@@ -7618,13 +7651,6 @@ ssl3_SendClientSecondRound(sslSocket *ss)
 
     ssl_GetXmitBufLock(ss);		/*******************************/
 
-    if (isTLS13) {
-        rv = ssl3_SendChangeCipherSpecs(ss);
-        if (rv != SECSuccess) {
-            goto loser;	/* err code was set. */
-        }
-    }
-
     if (ss->ssl3.sendEmptyCert) {
 	ss->ssl3.sendEmptyCert = PR_FALSE;
 	rv = ssl3_SendEmptyCertificate(ss);
@@ -7939,10 +7965,6 @@ tls13_SendServerHelloSequence(sslSocket *ss)
     if (rv != SECSuccess) {
 	return rv;	/* err code is set. */
     }
-    rv = ssl3_SendChangeCipherSpecs(ss);
-    if (rv != SECSuccess) {
-	return rv;	/* err code is set. */
-    }
     rv = ssl3_SendCertificate(ss);
     if (rv != SECSuccess) {
 	return rv;	/* error code is set. */
@@ -7975,7 +7997,9 @@ tls13_SendServerHelloSequence(sslSocket *ss)
 	return rv;	/* error code is set. */
     }
 
-    ss->ssl3.hs.ws = wait_change_cipher;
+    ss->ssl3.hs.ws = ss->opt.requestCertificate ?
+            wait_client_cert : wait_finished;
+
 
     return SECSuccess;
 }
@@ -8610,7 +8634,9 @@ compression_found:
 	    goto loser;
 	}
 	rv = ssl3_SendFinished(ss, 0);
-	ss->ssl3.hs.ws = wait_change_cipher;
+        ss->ssl3.hs.ws = ss->opt.requestCertificate ?
+                wait_client_cert : wait_finished;
+
 	if (rv != SECSuccess) {
 	    errCode = PORT_GetError();
 	    goto loser;
@@ -9349,6 +9375,8 @@ tls13_SendServerKeyShare(sslSocket* ss)
         PORT_SetError(SEC_ERROR_UNSUPPORTED_KEYALG);
         break;
     }
+
+    rv = tls13_UpdateCipherSpecs(ss, PR_TRUE);
 
     return rv;  /* err code already set */
 }
