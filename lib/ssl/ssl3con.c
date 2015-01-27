@@ -68,7 +68,9 @@ static SECStatus ssl3_ComputeHandshakeHashes(sslSocket *ss,
                                              ssl3CipherSpec *spec,
                                              SSL3Hashes *hashes,
                                              PRUint32 sender);
-static SECStatus tls13_UpdateCipherSpecs(sslSocket *ss, PRBool send);
+static SECStatus tls13_InstallCipherSpecs(sslSocket *ss, PRBool send);
+static SECStatus tls13_InstallFinalCipherSpecs(sslSocket *ss);
+
 static SECStatus ssl3_FlushHandshakeMessages(sslSocket *ss, PRInt32 flags);
 static int       ssl3_OIDToTLSHashAlgorithm(SECOidTag oid);
 
@@ -5521,11 +5523,33 @@ tls13_EarlyRecv(sslSocket *ss, unsigned char *buf, int len)
     return tocpy;
 }
 
+static SECStatus tls13_InstallFinalCipherSpecs(sslSocket *ss)
+{
+    SECStatus rv;
+
+    /* Derive the final master secret */
+    rv = ssl3_SetupPendingCipherSpec(ss);
+    if (rv != SECSuccess)
+        return rv;
+
+    // TODO(ekr@rtfm.com): Need to use the right expansion parameters
+    rv = ssl3_InitPendingCipherSpec(ss, ss->ssl3.cwSpec->master_secret);
+    if (rv != SECSuccess)
+        return rv;
+
+    rv = tls13_InstallCipherSpecs(ss, PR_FALSE);
+    if (rv != SECSuccess)
+        return rv;
+
+
+    return SECSuccess;
+}
+
 /* The TLS 1.3 model is currently much simpler than the TLS 1.2 model in
    that you never have to send with one cipher spec and receive with
    another, so we just init the cipher spec and then send it immediately.
 */
-static SECStatus tls13_UpdateCipherSpecs(sslSocket *ss, PRBool send)
+static SECStatus tls13_InstallCipherSpecs(sslSocket *ss, PRBool send)
 {
     SECStatus rv;
     ssl3CipherSpec *  pSpec;
@@ -7173,7 +7197,7 @@ tls13_HandleServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
         goto alert_loser;
     }
 
-    rv = tls13_UpdateCipherSpecs(ss, PR_FALSE);
+    rv = tls13_InstallCipherSpecs(ss, PR_FALSE);
     if (rv != SECSuccess) {
         desc     = internal_error;
         errCode  = SSL_ERROR_INIT_CIPHER_SUITE_FAILURE;
@@ -7688,7 +7712,7 @@ ssl3_SendClientSecondRound(sslSocket *ss)
         if (rv != SECSuccess) {
             goto loser;	/* err code was set. */
         }
-    }
+   }
 
     /* This must be done after we've set ss->ssl3.cwSpec in
      * ssl3_SendChangeCipherSpecs because SSL_GetChannelInfo uses information
@@ -9376,7 +9400,7 @@ tls13_SendServerKeyShare(sslSocket* ss)
         break;
     }
 
-    rv = tls13_UpdateCipherSpecs(ss, PR_TRUE);
+    rv = tls13_InstallCipherSpecs(ss, PR_TRUE);
 
     return rv;  /* err code already set */
 }
@@ -10993,6 +11017,12 @@ ssl3_SendFinished(sslSocket *ss, PRInt32 flags)
 	goto fail;	/* error code set by ssl3_FlushHandshake */
     }
 
+    if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3 && !ss->sec.isServer) {
+        rv = tls13_InstallFinalCipherSpecs(ss);
+        if (rv != SECSuccess) {
+            goto fail;	/* error code set by tls13_InstallFinalCipherSpecs */
+        }
+    }
     ssl3_RecordKeyLog(ss);
 
     return SECSuccess;
@@ -11159,7 +11189,14 @@ ssl3_HandleFinished(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     ssl_GetXmitBufLock(ss);	/*************************************/
 
     if (isTLS13) {
-        needToSendFinished = !ss->sec.isServer;
+        if (ss->sec.isServer) {
+            rv =tls13_InstallFinalCipherSpecs(ss);
+            if (rv != SECSuccess)
+                goto xmit_loser;
+            needToSendFinished = PR_FALSE;
+        } else {
+            needToSendFinished = PR_TRUE;
+        }
     } else {
         needToSendFinished =
                 (isServer && !ss->ssl3.hs.isResuming) ||

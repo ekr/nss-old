@@ -271,7 +271,8 @@ class TlsAgent : public PollTarget {
     }
   }
 
-  void EnableCompression() {
+  
+void EnableCompression() {
     SECStatus rv = SSL_OptionSet(ssl_fd_, SSL_ENABLE_DEFLATE, PR_TRUE);
     ASSERT_EQ(SECSuccess, rv);
   }
