@@ -8676,9 +8676,7 @@ compression_found:
 	    goto loser;
 	}
 	rv = ssl3_SendFinished(ss, 0);
-        ss->ssl3.hs.ws = ss->opt.requestCertificate ?
-                wait_client_cert : wait_finished;
-
+	ss->ssl3.hs.ws = wait_change_cipher;
 	if (rv != SECSuccess) {
 	    errCode = PORT_GetError();
 	    goto loser;
