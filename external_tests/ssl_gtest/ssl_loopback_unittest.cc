@@ -567,8 +567,6 @@ class TlsConnectTestBase : public ::testing::Test {
         expect_extended_master_secret_(false) {}
 
   ~TlsConnectTestBase() {
-    delete client_;
-    delete server_;
   }
 
   void SetUp() {
@@ -583,9 +581,8 @@ class TlsConnectTestBase : public ::testing::Test {
   }
 
   void TearDown() {
-
-    client_ = nullptr;
-    server_ = nullptr;
+    delete client_;
+    delete server_;
 
     SSL_ClearSessionCache();
     SSL_ShutdownServerSessionIDCache();
@@ -695,7 +692,7 @@ class TlsConnectTestBase : public ::testing::Test {
 
     if (resume_ct) {
       // Check that the last two session ids match.
-      ASSERT_GE(2, session_ids_.size());
+      ASSERT_LE(2, session_ids_.size());
       ASSERT_EQ(session_ids_[session_ids_.size()-1],
                 session_ids_[session_ids_.size()-2]);
     }
