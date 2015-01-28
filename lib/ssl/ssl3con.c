@@ -45,7 +45,9 @@ static SECStatus ssl3_AuthCertificate(sslSocket *ss);
 static void      ssl3_CleanupPeerCerts(sslSocket *ss);
 static PK11SymKey *ssl3_GenerateRSAPMS(sslSocket *ss, ssl3CipherSpec *spec,
                                        PK11SlotInfo * serverKeySlot);
-static SECStatus ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms);
+
+static SECStatus ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms,
+                                         MasterSecretType mtype);
 static SECStatus ssl3_DeriveConnectionKeysPKCS11(sslSocket *ss);
 static SECStatus ssl3_HandshakeFailure(      sslSocket *ss);
 static SECStatus ssl3_InitState(             sslSocket *ss);
@@ -2175,7 +2177,7 @@ fail:
  * For the bypass case,  pms is NULL.
  */
 SECStatus
-ssl3_InitPendingCipherSpec(sslSocket *ss, PK11SymKey *pms)
+ssl3_InitPendingCipherSpec(sslSocket *ss, PK11SymKey *pms, MasterSecretType mtype)
 {
     ssl3CipherSpec  *  pwSpec;
     ssl3CipherSpec  *  cwSpec;
@@ -2191,7 +2193,7 @@ ssl3_InitPendingCipherSpec(sslSocket *ss, PK11SymKey *pms)
     cwSpec        = ss->ssl3.cwSpec;
 
     if (pms || (!pwSpec->msItem.len && !pwSpec->master_secret)) {
-	rv = ssl3_DeriveMasterSecret(ss, pms);
+	rv = ssl3_DeriveMasterSecret(ss, pms, mtype);
 	if (rv != SECSuccess) {
 	    goto done;  /* err code set by ssl3_DeriveMasterSecret */
 	}
@@ -3587,7 +3589,7 @@ ssl3_HandleChangeCipherSpecs(sslSocket *ss, sslBuffer *buf)
 ** Called from ssl3_InitPendingCipherSpec.   prSpec is pwSpec.
 */
 static SECStatus
-ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
+ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms, MasterSecretType mtype)
 {
     ssl3CipherSpec *  pwSpec = ss->ssl3.pwSpec;
     const ssl3KEADef *kea_def= ss->ssl3.hs.kea_def;
@@ -3598,11 +3600,16 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
     PRBool            isTLS12=
 	    (PRBool)(isTLS && pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
     PRBool            isExtendedMS =
-            ssl3_ExtensionNegotiated(ss, ssl_extended_master_secret_xtn);
+            ssl3_ExtensionNegotiated(ss, ssl_extended_master_secret_xtn) ||
+            (pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_3);
     CK_SSL3_MASTER_KEY_DERIVE_PARAMS master_params;
     CK_NSS_TLSPRFParams extended_master_params;
     SSL3Hashes hashes;
-    unsigned char extended_label[] = "extended master secret";
+    char *extended_labels[] = {
+      "extended master secret",
+      "handshake master secret",
+      "resumption premaster secret"
+    };
     PRBool  failedHandshakeHashes = PR_FALSE;
     /* 
      * Whenever isDH is true, we need to use CKM_TLS_MASTER_KEY_DERIVE_DH
@@ -3673,17 +3680,21 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
             params.data = (unsigned char *) &master_params;
             params.len  = sizeof master_params;
         } else {
+            char *label;
+
             if (isDH) {
                 extended_master_params.pVersion                     = NULL;
             } else {
                 extended_master_params.pVersion                     = &pms_version;
             }
 
-            extended_master_params.pLabel = extended_label;
-            extended_master_params.ulLabelLen = sizeof extended_label;
+            label = extended_labels[mtype];
+            extended_master_params.pLabel = (unsigned char *)label;
+            extended_master_params.ulLabelLen = strlen(label) + 1;
             extended_master_params.pSeed = hashes.u.raw;
             extended_master_params.ulSeedLen = hashes.len;
 
+            ssl_PrintBuf(ss, "Handshake hashes", hashes.u.raw, hashes.len);
             params.data = (unsigned char *) &extended_master_params;
             params.len  = sizeof extended_master_params;
         }
@@ -5536,7 +5547,8 @@ static SECStatus tls13_InstallFinalCipherSpecs(sslSocket *ss)
         return rv;
 
     // TODO(ekr@rtfm.com): Need to use the right expansion parameters
-    rv = ssl3_InitPendingCipherSpec(ss, ss->ssl3.cwSpec->master_secret);
+    rv = ssl3_InitPendingCipherSpec(ss, ss->ssl3.cwSpec->master_secret,
+                                    MasterSecret);
     if (rv != SECSuccess)
         return rv;
 
@@ -6222,7 +6234,7 @@ sendRSAClientKeyExchange(sslSocket * ss, SECKEYPublicKey * svrPubKey)
 	goto loser;	/* err set by ssl3_AppendHandshake* */
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    rv = ssl3_InitPendingCipherSpec(ss,  pms, MasterSecret);
     PK11_FreeSymKey(pms); pms = NULL;
 
     if (rv != SECSuccess) {
@@ -6314,7 +6326,7 @@ sendDHClientKeyExchange(sslSocket * ss, SECKEYPublicKey * svrPubKey)
 	goto loser;	/* err set by ssl3_AppendHandshake* */
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    rv = ssl3_InitPendingCipherSpec(ss,  pms, MasterSecret);
     PK11_FreeSymKey(pms); pms = NULL;
 
     if (rv != SECSuccess) {
@@ -6833,7 +6845,7 @@ ssl3_HandleServerHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	}
 
 	/* NULL value for PMS signifies re-use of the old MS */
-	rv = ssl3_InitPendingCipherSpec(ss,  NULL);
+	rv = ssl3_InitPendingCipherSpec(ss,  NULL, MasterSecret);
 	if (rv != SECSuccess) {
 	    goto alert_loser;	/* err code was set */
 	}
@@ -8652,7 +8664,7 @@ compression_found:
 	}
 
 	/* NULL value for PMS signifies re-use of the old MS */
-	rv = ssl3_InitPendingCipherSpec(ss,  NULL);
+	rv = ssl3_InitPendingCipherSpec(ss,  NULL, MasterSecret);
 	if (rv != SECSuccess) {
 	    errCode = PORT_GetError();
 	    goto loser;
@@ -9765,7 +9777,7 @@ ssl3_HandleRSAClientKeyExchange(sslSocket *ss,
 	    pwSpec->msItem.len  = SSL3_MASTER_SECRET_LENGTH;
 	    PK11_GenerateRandom(pwSpec->msItem.data, pwSpec->msItem.len);
 	}
-	rv = ssl3_InitPendingCipherSpec(ss,  NULL);
+	rv = ssl3_InitPendingCipherSpec(ss,  NULL, MasterSecret);
     } else 
 #endif
     {
@@ -9801,7 +9813,7 @@ double_bypass:
 	}
 
 	/* This step will derive the MS from the PMS, among other things. */
-	rv = ssl3_InitPendingCipherSpec(ss,  pms);
+	rv = ssl3_InitPendingCipherSpec(ss,  pms, MasterSecret);
 	PK11_FreeSymKey(pms);
     }
 

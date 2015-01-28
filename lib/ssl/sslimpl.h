@@ -1683,6 +1683,12 @@ ECName  ssl3_GetCurveNameForServerSocket(sslSocket *ss);
 
 #endif /* NSS_DISABLE_ECC */
 
+typedef enum {
+    MasterSecret,
+    HandshakeMasterSecret,   /* TLS 1.3 */
+    ResumptionMasterSecret   /* TLS 1.3 */
+} MasterSecretType;
+
 extern SECStatus ssl3_CipherPrefSetDefault(ssl3CipherSuite which, PRBool on);
 extern SECStatus ssl3_CipherPrefGetDefault(ssl3CipherSuite which, PRBool *on);
 extern SECStatus ssl2_CipherPrefSetDefault(PRInt32 which, PRBool enabled);
@@ -1744,7 +1750,8 @@ extern SECStatus ssl3_ComputeCommonKeyHash(SECOidTag hashAlg,
 				unsigned int bufLen, SSL3Hashes *hashes, 
 				PRBool bypassPKCS11);
 extern void ssl3_DestroyCipherSpec(ssl3CipherSpec *spec, PRBool freeSrvName);
-extern SECStatus ssl3_InitPendingCipherSpec(sslSocket *ss, PK11SymKey *pms);
+extern SECStatus ssl3_InitPendingCipherSpec(sslSocket *ss, PK11SymKey *pms,
+                                            MasterSecretType mtype);
 extern SECStatus ssl3_AppendHandshake(sslSocket *ss, const void *void_src, 
 			PRInt32 bytes);
 extern SECStatus ssl3_AppendHandshakeHeader(sslSocket *ss, 

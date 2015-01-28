@@ -385,8 +385,10 @@ class TlsAgent : public PollTarget {
 
       SetState(CONNECTED);
 
-      Poller::Instance()->Wait(READABLE_EVENT, adapter_, this,
-                               &TlsAgent::ReadableCallback);
+      if (mode_ == STREAM) {
+          Poller::Instance()->Wait(READABLE_EVENT, adapter_, this,
+                                   &TlsAgent::ReadableCallback);
+      }
       return;
     }
 

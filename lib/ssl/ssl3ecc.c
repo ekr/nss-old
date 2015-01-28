@@ -336,7 +336,7 @@ ssl3_SendECDHClientKeyExchange(sslSocket * ss, SECKEYPublicKey * svrPubKey)
         goto loser;     /* err set by ssl3_AppendHandshake* */
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    rv = ssl3_InitPendingCipherSpec(ss,  pms, MasterSecret);
     PK11_FreeSymKey(pms); pms = NULL;
 
     if (rv != SECSuccess) {
@@ -475,7 +475,7 @@ ssl3_HandleECDHClientKeyExchange(sslSocket *ss, SSL3Opaque *b,
         return SECFailure;
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    rv = ssl3_InitPendingCipherSpec(ss,  pms, MasterSecret);
     PK11_FreeSymKey(pms);
     if (rv != SECSuccess) {
         SEND_ALERT
@@ -494,10 +494,13 @@ tls13_HandleECDHKeyShare(sslSocket *ss, SSL3Opaque *b,
                          SECKEYPublicKey *myPubKey,
                          SECKEYPrivateKey *myPrivKey)
 {
-    PK11SymKey *      pms;
+    PLArenaPool *    arena     = NULL;
+    SECKEYPublicKey *peerKey   = NULL;
     SECStatus         rv;
     SECKEYPublicKey   peerPubKey;
-    CK_MECHANISM_TYPE target;
+    SECItem           ec_point  = {siBuffer, NULL, 0};
+    int              errCode   = SSL_ERROR_RX_MALFORMED_SERVER_KEY_EXCH; // TODO(ekr@rtfm.com): Fix error
+    SSL3AlertDescription desc  = illegal_parameter;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveRecvBufLock(ss) );
     PORT_Assert( ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss) );
@@ -508,26 +511,80 @@ tls13_HandleECDHKeyShare(sslSocket *ss, SSL3Opaque *b,
     peerPubKey.u.ec.DEREncodedParams.data =
         myPubKey->u.ec.DEREncodedParams.data;
 
-    rv = ssl3_ConsumeHandshakeVariable(ss, &peerPubKey.u.ec.publicValue, 2, &b, &length);
+    rv = ssl3_ConsumeHandshakeVariable(ss, &ec_point, 2, &b, &length);
     if (rv != SECSuccess) {
-        SEND_ALERT
-        return SECFailure;      /* XXX Who sets the error code?? */
+        goto alert_loser;  /* Malformed */
     }
+    /* Fail if the ec point uses compressed representation */
+    if (ec_point.data[0] != EC_POINT_FORM_UNCOMPRESSED) {
+        errCode = SEC_ERROR_UNSUPPORTED_EC_POINT_FORM;
+        desc = handshake_failure;
+        goto alert_loser;
+    }
+
+    arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
+    if (arena == NULL) {
+        goto no_memory;
+    }
+
+    peerKey = PORT_ArenaZNew(arena, SECKEYPublicKey);
+    if (peerKey == NULL) {
+        goto no_memory;
+    }
+
+    peerKey->arena                 = arena;
+    peerKey->keyType               = ecKey;
+    if (SECITEM_CopyItem(arena, &peerKey->u.ec.DEREncodedParams,
+                        &myPubKey->u.ec.DEREncodedParams)) {
+        PORT_FreeArena(arena, PR_FALSE);
+        goto no_memory;
+    }
+
+    /* copy publicValue in peerKey */
+    if (SECITEM_CopyItem(arena, &peerKey->u.ec.publicValue,  &ec_point))
+    {
+        PORT_FreeArena(arena, PR_FALSE);
+        goto no_memory;
+    }
+    peerKey->pkcs11Slot         = NULL;
+    peerKey->pkcs11ID           = CK_INVALID_HANDLE;
+    ss->sec.peerKey = peerKey;
+
+    return SECSuccess;
+
+alert_loser:
+    (void)SSL3_SendAlert(ss, alert_fatal, desc);
+    PORT_SetError( errCode );
+    return SECFailure;
+
+no_memory:      /* no-memory error has already been set. */
+    ssl_MapLowLevelError(SSL_ERROR_SERVER_KEY_EXCHANGE_FAILURE);
+    return SECFailure;
+}
+
+SECStatus
+tls13_DeriveECDHSharedKey(sslSocket * ss,
+                         SECKEYPublicKey *myPubKey,
+                         SECKEYPrivateKey *myPrivKey)
+{
+    PK11SymKey *      pms;
+    CK_MECHANISM_TYPE target;
+    SECStatus rv;
 
     target = CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256;
 
     /*  Determine the PMS */
-    pms = PK11_PubDeriveWithKDF(myPrivKey, &peerPubKey, PR_FALSE, NULL, NULL,
+    pms = PK11_PubDeriveWithKDF(myPrivKey, ss->sec.peerKey, PR_FALSE, NULL, NULL,
                                 CKM_ECDH1_DERIVE, target, CKA_DERIVE, 0,
                                 CKD_NULL, NULL, NULL);
 
     if (pms == NULL) {
         /* last gasp.  */
-        ssl_MapLowLevelError(SSL_ERROR_CLIENT_KEY_EXCHANGE_FAILURE);
+        ssl_MapLowLevelError(SSL_ERROR_CLIENT_KEY_EXCHANGE_FAILURE); // TODO(ekr@rtfm.com): Fix error
         return SECFailure;
     }
 
-    rv = ssl3_InitPendingCipherSpec(ss,  pms);
+    rv = ssl3_InitPendingCipherSpec(ss,  pms, HandshakeMasterSecret);
     PK11_FreeSymKey(pms);
     if (rv != SECSuccess) {
         SEND_ALERT
@@ -563,6 +620,7 @@ tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     rv = tls13_HandleECDHKeyShare(ss, b, length,
                                   ss->ephemeralECDHKeyPair->pubKey,
                                   ss->ephemeralECDHKeyPair->privKey);
+
     return rv;
 }
 
@@ -570,7 +628,6 @@ tls13_HandleECDHClientKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 SECStatus
 tls13_HandleECDHServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 {
-    ECName             curve;
     SECStatus          rv;
     PRInt32 group;
     ECName expectedGroup;
@@ -595,6 +652,14 @@ tls13_HandleECDHServerKeyShare(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
     rv = tls13_HandleECDHKeyShare(ss, b, length,
                                   ss->ephemeralECDHKeyPair->pubKey,
                                   ss->ephemeralECDHKeyPair->privKey);
+    if (rv != SECSuccess) {
+        return SECFailure;  /* Error set below. */ // TODO(ekr@rtfm.com): check
+    }
+
+    rv = tls13_DeriveECDHSharedKey(ss,
+                                   ss->ephemeralECDHKeyPair->pubKey,
+                                   ss->ephemeralECDHKeyPair->privKey);
+
     return rv;
 }
 
@@ -1089,6 +1154,10 @@ tls13_SendECDHServerKeyShare(sslSocket *ss)
     if (rv != SECSuccess) {
         goto loser;     /* err set by AppendHandshake. */
     }
+
+    rv = tls13_DeriveECDHSharedKey(ss,
+                                     ss->ephemeralECDHKeyPair->pubKey,
+                                     ss->ephemeralECDHKeyPair->privKey);
 
 loser:
     return rv;  /* err code set internally */
