@@ -221,7 +221,9 @@ class TlsAgent : public PollTarget {
         ssl_fd_(nullptr),
         role_(role),
         state_(INIT),
-        err_code_(0) {
+        err_code_(0),
+        send_ctr_(0),
+        recv_ctr_(0) {
     memset(&info_, 0, sizeof(info_));
     memset(&csinfo_, 0, sizeof(csinfo_));
   }
@@ -271,8 +273,7 @@ class TlsAgent : public PollTarget {
     }
   }
 
-  
-void EnableCompression() {
+  void EnableCompression() {
     SECStatus rv = SSL_OptionSet(ssl_fd_, SSL_ENABLE_DEFLATE, PR_TRUE);
     ASSERT_EQ(SECSuccess, rv);
   }
@@ -383,6 +384,9 @@ void EnableCompression() {
       ASSERT_EQ(SECSuccess, rv);
 
       SetState(CONNECTED);
+
+      Poller::Instance()->Wait(READABLE_EVENT, adapter_, this,
+                               &TlsAgent::ReadableCallback);
       return;
     }
 
@@ -448,6 +452,27 @@ void EnableCompression() {
         << "unexpected extended master secret state for " << name_;
   }
 
+  void SendData(size_t bytes) {
+    uint8_t block[1024];
+
+    while(bytes) {
+      size_t tosend = std::min(sizeof(block), bytes);
+
+      for(size_t i=0; i<tosend; ++i) {
+        block[i] = 0xff & send_ctr_;
+        ++send_ctr_;
+      }
+
+      LOG("Writing " << tosend << " bytes");
+      int32_t rv = PR_Write(ssl_fd_, block, tosend);
+      ASSERT_EQ(tosend, rv);
+
+      bytes -= tosend;
+    }
+  }
+
+  size_t received_bytes() const { return recv_ctr_; }
+
  private:
   const static char* states[];
 
@@ -472,7 +497,34 @@ void EnableCompression() {
 
   void ReadableCallback_int(Event event) {
     LOG("Readable");
-    Handshake();
+    switch (state_) {
+      case CONNECTING:
+        Handshake();
+        break;
+      case CONNECTED:
+        ReadBytes();
+        break;
+      default:
+        break;
+    }
+  }
+
+  void ReadBytes() {
+    uint8_t block[1024];
+
+    LOG("Reading application data from socket");
+
+    int32_t rv = PR_Read(ssl_fd_, block, sizeof(block));
+    ASSERT_LE(0, rv);
+
+    LOG("Read " << rv << " bytes");
+    for (size_t i=0; i<rv; ++i) {
+      ASSERT_EQ((recv_ctr_ & 0xff), block[i]);
+      recv_ctr_++;
+    }
+
+    Poller::Instance()->Wait(READABLE_EVENT, adapter_, this,
+                             &TlsAgent::ReadableCallback);
   }
 
   const std::string name_;
@@ -485,6 +537,8 @@ void EnableCompression() {
   int32_t err_code_;
   SSLChannelInfo info_;
   SSLCipherSuiteInfo csinfo_;
+  size_t send_ctr_;
+  size_t recv_ctr_;
 };
 
 const char* TlsAgent::states[] = {"INIT", "CONNECTING", "CONNECTED", "ERROR"};
@@ -654,6 +708,16 @@ class TlsConnectTestBase : public ::testing::Test {
 class TlsConnectTest : public TlsConnectTestBase {
  public:
   TlsConnectTest() : TlsConnectTestBase(STREAM) {}
+
+  void SendReceive() {
+    client_->SendData(50);
+    server_->SendData(50);
+    WAIT_(
+        client_->received_bytes() == 50 &&
+        server_->received_bytes() == 50, 2000);
+    ASSERT_EQ(50, client_->received_bytes());
+    ASSERT_EQ(50, server_->received_bytes());
+  }
 };
 
 class DtlsConnectTest : public TlsConnectTestBase {
@@ -1035,6 +1099,11 @@ TEST_F(TlsConnectTest, ConnectECDHETwiceNewKey) {
   ASSERT_FALSE((dhe1.public_key_.len() == dhe2.public_key_.len()) &&
                (!memcmp(dhe1.public_key_.data(), dhe2.public_key_.data(),
                         dhe1.public_key_.len())));
+}
+
+TEST_F(TlsConnectTest, ConnectSendReceive) {
+  Connect();
+  SendReceive();
 }
 
 INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
