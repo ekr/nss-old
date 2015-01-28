@@ -5527,6 +5527,9 @@ static SECStatus tls13_InstallFinalCipherSpecs(sslSocket *ss)
 {
     SECStatus rv;
 
+    SSL_TRC(3, ("%d: SSL3[%d]: Installing final cipher specs",
+		SSL_GETPID(), ss->fd));
+
     /* Derive the final master secret */
     rv = ssl3_SetupPendingCipherSpec(ss);
     if (rv != SECSuccess)
@@ -5553,6 +5556,9 @@ static SECStatus tls13_InstallCipherSpecs(sslSocket *ss, PRBool send)
 {
     SECStatus rv;
     ssl3CipherSpec *  pSpec;
+
+    SSL_TRC(3, ("%d: SSL3[%d]: Installing new cipher specs",
+		SSL_GETPID(), ss->fd));
 
     /* Flush out any old stuff in the handshake buffers */
     if (send) {

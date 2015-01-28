@@ -1106,6 +1106,22 @@ TEST_F(TlsConnectTest, ConnectSendReceive) {
   SendReceive();
 }
 
+#ifdef NSS_ENABLE_TLS_1_3
+TEST_F(TlsConnectTest, ConnectSendReceiveTLS_1_3)
+{
+  SKIP_DTLS();
+  EnsureTlsSetup();
+  EnableSomeECDHECiphers();
+  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3);
+  Connect();
+  SendReceive();
+  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+}
+#endif
+
 INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
                         ::testing::Values("TLS", "DTLS"));
 
