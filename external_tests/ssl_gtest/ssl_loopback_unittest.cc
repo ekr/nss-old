@@ -504,7 +504,9 @@ class TlsAgent : public PollTarget {
         Handshake();
         break;
       case CONNECTED:
-        ReadBytes();
+        if (mode_ == STREAM) {
+          ReadBytes();
+        }
         break;
       default:
         break;
