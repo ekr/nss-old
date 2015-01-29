@@ -6422,6 +6422,13 @@ loser:
     return rv;	/* err code already set. */
 }
 
+static SECStatus
+tls13_AddContextToHashes(sslSocket *ss, SSL3Hashes *hashes /* IN/OUT */,
+                       PRBool sending)
+{
+    return SECSuccess;
+}
+
 /* Called from ssl3_HandleServerHelloDone(). */
 static SECStatus
 ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
@@ -6429,6 +6436,7 @@ ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
     SECStatus     rv		= SECFailure;
     PRBool        isTLS;
     PRBool        isTLS12;
+    PRBool        isTLS13;
     SECItem       buf           = {siBuffer, NULL, 0};
     SSL3Hashes    hashes;
     KeyType       keyType;
@@ -6441,13 +6449,14 @@ ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
     SSL_TRC(3, ("%d: SSL3[%d]: send certificate_verify handshake",
 		SSL_GETPID(), ss->fd));
 
+    isTLS13 = (PRBool)(ss->version >= SSL_LIBRARY_VERSION_TLS_1_3);
     ssl_GetSpecReadLock(ss);
     if (ss->ssl3.hs.hashType == handshake_hash_single &&
 	ss->ssl3.hs.backupHash) {
 	rv = ssl3_ComputeBackupHandshakeHashes(ss, &hashes);
 	PORT_Assert(!ss->ssl3.hs.backupHash);
     } else {
-        if (ss->version >= SSL_LIBRARY_VERSION_TLS_1_3) {
+        if (isTLS13) {
             /* In TLS 1.3, we have already sent the CCS */
             rv = ssl3_ComputeHandshakeHashes(ss, ss->ssl3.cwSpec, &hashes, 0);
         } else {
@@ -6459,8 +6468,16 @@ ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
 	goto done;	/* err code was set by ssl3_ComputeHandshakeHashes */
     }
 
+    if (isTLS13) {
+        rv = tls13_AddContextToHashes(ss, &hashes, PR_TRUE);
+        if (rv != SECSuccess) {
+            goto done;	/* err code was set by tls13_AddContextToHashes */
+        }
+    }
+
     isTLS = (PRBool)(ss->ssl3.pwSpec->version > SSL_LIBRARY_VERSION_3_0);
     isTLS12 = (PRBool)(ss->ssl3.pwSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
+
     keyType = privKey->keyType;
     rv = ssl3_SignHashes(&hashes, privKey, &buf, isTLS);
     if (rv == SECSuccess) {
@@ -9533,7 +9550,7 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     SECStatus            rv;
     int                  errCode     = SSL_ERROR_RX_MALFORMED_CERT_VERIFY;
     SSL3AlertDescription desc        = handshake_failure;
-    PRBool               isTLS, isTLS12;
+    PRBool               isTLS, isTLS12, isTLS13;
     SSL3SignatureAndHashAlgorithm sigAndHash;
 
     SSL_TRC(3, ("%d: SSL3[%d]: handle certificate_verify handshake",
@@ -9543,6 +9560,7 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
 
     isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
     isTLS12 = (PRBool)(ss->ssl3.prSpec->version >= SSL_LIBRARY_VERSION_TLS_1_2);
+    isTLS13 = (PRBool)(ss->version >= SSL_LIBRARY_VERSION_TLS_1_3);
 
     if ((ss->ssl3.hs.ws != wait_cert_verify
          && ss->ssl3.hs.ws != wait_cert_request)
@@ -9550,6 +9568,15 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
 	desc    = unexpected_message;
 	errCode = SSL_ERROR_RX_UNEXPECTED_CERT_VERIFY;
 	goto alert_loser;
+    }
+
+    if (isTLS13) {
+        rv = tls13_AddContextToHashes(ss, hashes, PR_FALSE);
+        if (rv != SECSuccess) {
+            desc = internal_error;
+            errCode = SSL_ERROR_DIGEST_FAILURE;
+            goto alert_loser;
+        }
     }
 
     if (isTLS12) {
