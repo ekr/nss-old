@@ -6424,9 +6424,59 @@ loser:
 
 static SECStatus
 tls13_AddContextToHashes(sslSocket *ss, SSL3Hashes *hashes /* IN/OUT */,
-                       PRBool sending)
+                         SECOidTag algorithm, PRBool sending)
 {
+    SECStatus rv = SECSuccess;
+    PK11Context* ctx;
+    const unsigned char context_padding[] = {
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    };
+    const char *client_cert_verify_string = "TLS 1.3, client CertificateVerify";
+    const char *server_cert_verify_string = "TLS 1.3, server CertificateVerify";
+    const char *context_string = sending ^ ss->sec.isServer ?
+            client_cert_verify_string : server_cert_verify_string;
+    unsigned int hashlength;
+
+    /* Double check that we are doing SHA-256 for the handshake hash.*/
+    PORT_Assert(hashes->hashAlg == SEC_OID_SHA256);
+    if (hashes->hashAlg != SEC_OID_SHA256) {
+        PORT_SetError(SEC_ERROR_INVALID_ARGS);
+        goto loser;
+    }
+    PORT_Assert(hashes->len == 32);
+
+    ctx = PK11_CreateDigestContext(algorithm);
+    if (!ctx) {
+        PORT_SetError(SEC_ERROR_NO_MEMORY); /* TODO(ekr@rtfm.com): Already set? */
+        goto loser;
+    }
+    rv |= PK11_DigestBegin(ctx);
+    rv |= PK11_DigestOp(ctx, context_padding, sizeof(context_padding));
+    rv |= PK11_DigestOp(ctx, (unsigned char *)context_string,
+                        strlen(context_string) + 1); /* +1 includes the terminating 0 */
+    rv |= PK11_DigestOp(ctx, hashes->u.raw, hashes->len);
+    /* Update the hash in-place */
+    rv |= PK11_DigestFinal(ctx, hashes->u.raw, &hashlength, sizeof(hashes->u.raw));
+    PK11_DestroyContext(ctx, PR_TRUE);
+
+    hashes->len = hashlength;
+    hashes->hashAlg = algorithm;
+
+    if (rv) {
+        ssl_MapLowLevelError(SSL_ERROR_SHA_DIGEST_FAILURE);
+        goto loser;
+    }
     return SECSuccess;
+
+loser:
+    return SECFailure;
 }
 
 /* Called from ssl3_HandleServerHelloDone(). */
@@ -6455,6 +6505,20 @@ ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
 	ss->ssl3.hs.backupHash) {
 	rv = ssl3_ComputeBackupHandshakeHashes(ss, &hashes);
 	PORT_Assert(!ss->ssl3.hs.backupHash);
+        PORT_Assert(!isTLS13);
+        if (isTLS13) {
+            goto done;
+        }
+        /* TODO(ekr@rtfm.com): The backup hash here contains a SHA-1 hash
+           but in TLS 1.3, we always sign H(Context, Hash(handshake))
+           where:
+
+           H is the negotiated signature hash and
+           Hash is the cipher-suite specific handshake hash
+
+           Generally this means that Hash is SHA-256.
+           We need code to negotiate H but the current code is a mess.
+        */
     } else {
         if (isTLS13) {
             /* In TLS 1.3, we have already sent the CCS */
@@ -6469,7 +6533,8 @@ ssl3_SendCertificateVerify(sslSocket *ss, SECKEYPrivateKey *privKey)
     }
 
     if (isTLS13) {
-        rv = tls13_AddContextToHashes(ss, &hashes, PR_TRUE);
+        /* TODO(ekr@rtfm.com): Add TLS 1.3 negotiation for this hash */
+        rv = tls13_AddContextToHashes(ss, &hashes, SEC_OID_SHA256, PR_TRUE);
         if (rv != SECSuccess) {
             goto done;	/* err code was set by tls13_AddContextToHashes */
         }
@@ -9571,7 +9636,13 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     }
 
     if (isTLS13) {
-        rv = tls13_AddContextToHashes(ss, hashes, PR_FALSE);
+	/* We only support CertificateVerify messages that use the handshake
+	 * hash.
+         * TODO(ekr@rtfm.com): This should be easy to relax in TLS 1.3 by
+         * reading the client's hash algorithm first, but there may
+         * be subtleties so retain the restriction for now.
+         */
+        rv = tls13_AddContextToHashes(ss, hashes, hashes->hashAlg, PR_FALSE);
         if (rv != SECSuccess) {
             desc = internal_error;
             errCode = SSL_ERROR_DIGEST_FAILURE;
