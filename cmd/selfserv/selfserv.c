@@ -412,10 +412,11 @@ printSecurityInfo(PRFileDesc *fd)
 	       suite.macBits, suite.macAlgorithmName);
 	    FPRINTF(stderr, 
 	    "selfserv: Server Auth: %d-bit %s, Key Exchange: %d-bit %s\n"
-	    "          Compression: %s\n",
+	    "          Compression: %s, Extended Master Secret: %s\n",
 	       channel.authKeyBits, suite.authAlgorithmName,
 	       channel.keaKeyBits,  suite.keaTypeName,
-	       channel.compressionMethodName);
+               channel.compressionMethodName,
+               channel.extendedMasterSecretUsed ? "Yes": "No");
     	}
     }
     if (verbose) {
@@ -1912,10 +1913,6 @@ server_main(
 	if (rv != SECSuccess) {
 	    errExit("error enabling extended master secret ");
 	}
-        rv = SSL_CipherPrefSet(model_sock, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, PR_TRUE);
-	if (rv != SECSuccess) {
-	    errExit("error enabling extended master secret ");
-	}
     }
     for (kea = kt_rsa; kea < kt_kea_size; kea++) {
 	if (cert[kea] != NULL) {
@@ -2192,7 +2189,7 @@ main(int argc, char **argv)
     ** numbers, then capital letters, then lower case, alphabetical. 
     */
     optstate = PL_CreateOptState(argc, argv, 
-        "2:A:BC:DEL:M:NP:RST:V:Ya:bc:d:e:f:g:hi:jk:lmn:op:qrst:uvw:xyz");
+        "2:A:BC:DEGL:M:NP:RST:V:Ya:bc:d:e:f:g:hi:jk:lmn:op:qrst:uvw:xyz");
     while ((status = PL_GetNextOpt(optstate)) == PL_OPT_OK) {
 	++optionsFound;
 	switch(optstate->option) {
@@ -2206,6 +2203,8 @@ main(int argc, char **argv)
 
 	case 'D': noDelay = PR_TRUE; break;
 	case 'E': disableStepDown = PR_TRUE; break;
+
+        case 'G': enableExtendedMasterSecret = PR_TRUE; break;
 
 	case 'I': /* reserved for OCSP multi-stapling */ break;
 
@@ -2228,8 +2227,6 @@ main(int argc, char **argv)
 	case 'N': NoReuse = PR_TRUE; break;
 
 	case 'R': disableRollBack = PR_TRUE; break;
-
-        case 'S': enableExtendedMasterSecret = PR_TRUE; break;
 
 	case 'T':
 	    if (enableOCSPStapling(optstate->value) != SECSuccess) {
