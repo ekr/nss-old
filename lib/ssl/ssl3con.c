@@ -6465,6 +6465,7 @@ tls13_AddContextToHashes(sslSocket *ss, SSL3Hashes *hashes /* IN/OUT */,
     /* Update the hash in-place */
     rv |= PK11_DigestFinal(ctx, hashes->u.raw, &hashlength, sizeof(hashes->u.raw));
     PK11_DestroyContext(ctx, PR_TRUE);
+    PRINT_BUF(90, (NULL, "TLS 1.3 hash with context", hashes->u.raw, hashlength));
 
     hashes->len = hashlength;
     hashes->hashAlg = algorithm;
