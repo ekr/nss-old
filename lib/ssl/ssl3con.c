@@ -6463,9 +6463,6 @@ ssl3_HandleServerHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 	goto alert_loser;
     }
 
-    fprintf(stderr, "EKR: Negotiated tickets = %d\n",
-            ssl3_ExtensionNegotiated(ss, ssl_session_ticket_xtn));
-
     /* Any errors after this point are not "malformed" errors. */
     desc    = handshake_failure;
 
@@ -7936,10 +7933,6 @@ ssl3_HandleClientHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
      * but OpenSSL-0.9.8g does not accept session tickets while
      * resuming.)
      */
-    fprintf(stderr, "EKR: Negotiated tickets (server)= %d sid=%p\n",
-            ssl3_ExtensionNegotiated(ss, ssl_session_ticket_xtn), sid);
-
-
     if (ssl3_ExtensionNegotiated(ss, ssl_session_ticket_xtn) && sid == NULL) {
 	ssl3_RegisterServerHelloExtensionSender(ss,
 	    ssl_session_ticket_xtn, ssl3_SendSessionTicketXtn);
