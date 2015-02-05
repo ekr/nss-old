@@ -3617,8 +3617,9 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
             else master_derive = CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256;
         } else {
             // TODO(ekr@rtfm.com): Update when there is a DH version.
-            if(isDH) master_derive = CKM_NSS_TLS_MASTER_KEY_DERIVE_PRF;
-            else master_derive = CKM_NSS_TLS_MASTER_KEY_DERIVE_PRF;
+            if(isDH) master_derive = CKM_TLS_PRF_GENERAL;
+            else master_derive = CKM_TLS_PRF_GENERAL;
+            extended_master_params.prfMechanism = CKM_SHA256;
         }
 	key_derive    = CKM_NSS_TLS_KEY_AND_MAC_DERIVE_SHA256;
 	keyFlags      = CKF_SIGN | CKF_VERIFY;
