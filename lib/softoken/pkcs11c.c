@@ -5923,6 +5923,104 @@ CK_RV NSC_DeriveKey( CK_SESSION_HANDLE hSession,
     /*
      * generate the master secret 
      */
+    case CKM_TLS_PRF_GENERAL:
+      {
+        CK_NSS_TLSPRFParams    *tls_prf_params;
+        SSL3RSAPreMasterSecret *rsa_pms;
+        SECStatus status;
+        SECItem pms    = { siBuffer, NULL, 0 };
+        SECItem seed   = { siBuffer, NULL, 0 };
+        SECItem master = { siBuffer, NULL, 0 };
+        char* label;
+
+        tls_prf_params = (CK_NSS_TLSPRFParams*) pMechanism->pParameter;
+
+        /* First do the consistency checks */
+        att2 = sftk_FindAttribute(sourceKey,CKA_KEY_TYPE);
+        if ((att2 == NULL) ||
+            (*(CK_KEY_TYPE *)att2->attrib.pValue != CKK_GENERIC_SECRET)) {
+          if (att2) sftk_FreeAttribute(att2);
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+        sftk_FreeAttribute(att2);
+        if (keyType != CKK_GENERIC_SECRET) {
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+        if ((keySize != 0) && (keySize != SSL3_MASTER_SECRET_LENGTH)) {
+          crv = CKR_KEY_FUNCTION_NOT_PERMITTED;
+          break;
+        }
+
+        /* Ensure that the label is null-terminated */
+        if (tls_prf_params->pLabel[tls_prf_params->ulLabelLen - 1] != '\0') {
+          crv = CKR_TEMPLATE_INCONSISTENT;
+          break;
+        }
+
+        /* Do the key derivation */
+        pms.data    = (unsigned char*) att->attrib.pValue;
+        pms.len     =                  att->attrib.ulValueLen;
+        seed.data   = tls_prf_params->pSeed;
+        seed.len    = tls_prf_params->ulSeedLen;
+        master.data = key_block;
+        master.len  = SSL3_MASTER_SECRET_LENGTH;
+        label       = (char*) tls_prf_params->pLabel;
+
+        if (tls_prf_params-> prfMechanism == CKM_TLS_PRF) {
+          status = TLS_PRF(&pms, label, &seed, &master, isFIPS);
+        } else {
+          HASH_HashType hash = HASH_AlgNULL;
+	         switch (tls_prf_params->prfMechanism) {
+            case CKM_SHA_1: hash = HASH_AlgSHA1; break;
+            case CKM_SHA256: hash = HASH_AlgSHA256; break;
+            case CKM_SHA384: hash = HASH_AlgSHA384; break;
+            case CKM_SHA512: hash = HASH_AlgSHA512; break;
+          }
+          if (hash == HASH_AlgNULL) {
+            crv = CKR_MECHANISM_PARAM_INVALID;
+            break;
+          }
+
+          status = TLS_P_hash(hash, &pms, label, &seed, &master, isFIPS);
+        }
+
+        /* Reflect the version if required, and the input looks like a PMS */
+        if (tls_prf_params->pVersion) {
+          if (att->attrib.ulValueLen != SSL3_PMS_LENGTH) {
+            crv = CKR_KEY_TYPE_INCONSISTENT;
+            break;
+          }
+
+          SFTKSessionObject *sessKey = sftk_narrowToSessionObject(key);
+	  rsa_pms = (SSL3RSAPreMasterSecret *) att->attrib.pValue;
+	  /* don't leak more key material then necessary for SSL to work */
+	  if ((sessKey == NULL) || sessKey->wasDerived) {
+	    tls_prf_params->pVersion->major = 0xff;
+	    tls_prf_params->pVersion->minor = 0xff;
+	  } else {
+	    tls_prf_params->pVersion->major = rsa_pms->client_version[0];
+	    tls_prf_params->pVersion->minor = rsa_pms->client_version[1];
+	  }
+        }
+
+        /* Store the results */
+        crv = sftk_forceAttribute(key, CKA_VALUE, key_block,
+                                  SSL3_MASTER_SECRET_LENGTH);
+        if (crv != CKR_OK) break;
+        keyType = CKK_GENERIC_SECRET;
+        crv = sftk_forceAttribute(key, CKA_KEY_TYPE, &keyType, sizeof(keyType));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_SIGN,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_VERIFY,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        crv = sftk_forceAttribute(key,CKA_DERIVE,  &cktrue,sizeof(CK_BBOOL));
+        if (crv != CKR_OK) break;
+        break;
+      }
+
     case CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256:
     case CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256:
 	isSHA256 = PR_TRUE;
