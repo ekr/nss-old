@@ -318,6 +318,27 @@ typedef struct CK_NSS_HKDFParams {
 } CK_NSS_HKDFParams;
 
 /*
+ * Optional parameter for the CKM_TLS_PRF_GENERAL.  This parameter may be
+ * omitted only when the mechanism is being called in a context where inputs
+ * are fed to it incrementally (e.g., C_SignInit).  (In that case, the label
+ * and seed can be provided sequentially.)  In particular, this parameter is
+ * mandatory when the mechanism is used with C_DeriveKey.
+ *
+ * For the TLS 1.2 PRF, the hashAlg parameter determines the hash function used.
+ * For earlier versions of the PRF, set this value to CKM_TLS_PRF.
+ *
+ * The other fields are as described in RFC 5246.
+ */
+typedef struct CK_NSS_TLSPRFParams {
+  CK_MECHANISM_TYPE prfMechanism;
+  CK_BYTE_PTR pLabel;
+  CK_ULONG ulLabelLen;
+  CK_BYTE_PTR pSeed;
+  CK_ULONG ulSeedLen;
+  CK_VERSION_PTR pVersion;
+} CK_NSS_TLSPRFParams;
+
+/*
  * Trust info
  *
  * This isn't part of the Cryptoki standard (yet), so I'm putting
