@@ -3616,7 +3616,7 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
             if(isDH) master_derive = CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256;
             else master_derive = CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256;
         } else {
-            // TODO(ekr@rtfm.com): Update when there is a DH version.
+            /* TODO(ekr@rtfm.com): Update when there is a DH version. */
             if(isDH) master_derive = CKM_TLS_PRF_GENERAL;
             else master_derive = CKM_TLS_PRF_GENERAL;
             extended_master_params.prfMechanism = CKM_SHA256;
@@ -3624,9 +3624,15 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
 	key_derive    = CKM_NSS_TLS_KEY_AND_MAC_DERIVE_SHA256;
 	keyFlags      = CKF_SIGN | CKF_VERIFY;
     } else if (isTLS) {
-        PORT_Assert(!isExtendedMS);
-	if(isDH) master_derive = CKM_TLS_MASTER_KEY_DERIVE_DH;
-	else master_derive = CKM_TLS_MASTER_KEY_DERIVE;
+        if (!isExtendedMS) {
+            if(isDH) master_derive = CKM_TLS_MASTER_KEY_DERIVE_DH;
+            else master_derive = CKM_TLS_MASTER_KEY_DERIVE;
+        } else {
+            /* TODO(ekr@rtfm.com): Update when there is a DH version. */
+            if(isDH) master_derive = CKM_TLS_PRF_GENERAL;
+            else master_derive = CKM_TLS_PRF_GENERAL;
+            extended_master_params.prfMechanism = CKM_TLS_PRF;
+        }
 	key_derive    = CKM_TLS_KEY_AND_MAC_DERIVE;
 	keyFlags      = CKF_SIGN | CKF_VERIFY;
     } else {
