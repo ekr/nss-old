@@ -417,11 +417,6 @@ class TlsAgent : public PollTarget {
   void EnableExtendedMasterSecret() {
     ASSERT_TRUE(EnsureTlsSetup());
 
-    // TODO(ekr@rtfm.com): Temporary. Remove when we have session hash for
-    // other versions.
-    SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                    SSL_LIBRARY_VERSION_TLS_1_2);
-
     SECStatus rv = SSL_OptionSet(ssl_fd_,
                                  SSL_ENABLE_EXTENDED_MASTER_SECRET,
                                  PR_TRUE);
@@ -804,20 +799,12 @@ TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretTicket) {
 }
 
 TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretClientOnly) {
-  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                    SSL_LIBRARY_VERSION_TLS_1_2);
-  server_->EnableSomeECDHECiphers();
-
   client_->EnableExtendedMasterSecret();
   ExpectExtendedMasterSecret(false);
   Connect();
 }
 
 TEST_P(TlsConnectGeneric, ConnectExtendedMasterSecretServerOnly) {
-  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                    SSL_LIBRARY_VERSION_TLS_1_2);
-  client_->EnableSomeECDHECiphers();
-
   server_->EnableExtendedMasterSecret();
   ExpectExtendedMasterSecret(false);
   Connect();
