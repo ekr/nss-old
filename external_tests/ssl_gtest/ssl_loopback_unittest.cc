@@ -8,6 +8,7 @@
 #include "keyhi.h"
 
 #include <memory>
+#include <tuple>
 
 #include "test_io.h"
 #include "tls_parser.h"
@@ -223,6 +224,10 @@ class TlsAgent : public PollTarget {
         state_(INIT) {
       memset(&info_, 0, sizeof(info_));
       memset(&csinfo_, 0, sizeof(csinfo_));
+      SECStatus rv = SSL_VersionRangeGetDefault(mode_ == STREAM ?
+                                                ssl_variant_stream : ssl_variant_datagram,
+                                                &vrange_);
+      EXPECT_EQ(SECSuccess, rv);
   }
 
   ~TlsAgent() {
@@ -305,7 +310,11 @@ class TlsAgent : public PollTarget {
       if (rv != SECSuccess) return false;
     }
 
-    SECStatus rv = SSL_AuthCertificateHook(ssl_fd_, AuthCertificateHook,
+    SECStatus rv = SSL_VersionRangeSet(ssl_fd_, &vrange_);
+    EXPECT_EQ(SECSuccess, rv);
+    if (rv != SECSuccess) return false;
+
+    rv = SSL_AuthCertificateHook(ssl_fd_, AuthCertificateHook,
                                            reinterpret_cast<void*>(this));
     EXPECT_EQ(SECSuccess, rv);
     if (rv != SECSuccess) return false;
@@ -314,11 +323,14 @@ class TlsAgent : public PollTarget {
   }
 
   void SetVersionRange(uint16_t minver, uint16_t maxver) {
-    ASSERT_TRUE(EnsureTlsSetup());
+    ASSERT_EQ(nullptr, ssl_fd_);
 
-    SSLVersionRange range = {minver, maxver};
-    ASSERT_EQ(SECSuccess, SSL_VersionRangeSet(ssl_fd_, &range));
+    vrange_.min = minver;
+    vrange_.max = maxver;
   }
+
+  uint16_t min_version() const { return vrange_.min; }
+  uint16_t max_version() const { return vrange_.max; }
 
   State state() const { return state_; }
 
@@ -334,6 +346,12 @@ class TlsAgent : public PollTarget {
     *version = info_.protocolVersion;
 
     return true;
+  }
+
+  uint16_t version() const {
+    EXPECT_EQ(CONNECTED, state_);
+
+    return info_.protocolVersion;
   }
 
   bool cipher_suite(int16_t* cipher_suite) const {
@@ -466,6 +484,7 @@ class TlsAgent : public PollTarget {
   State state_;
   SSLChannelInfo info_;
   SSLCipherSuiteInfo csinfo_;
+  SSLVersionRange vrange_;
 };
 
 const char* TlsAgent::states[] = {"INIT", "CONNECTING", "CONNECTED", "ERROR"};
@@ -540,6 +559,13 @@ class TlsConnectTestBase : public ::testing::Test {
 
   void Connect() {
     ConnectInt();
+
+    // Check the version is as expected
+    ASSERT_EQ(client_->version(), server_->version());
+    ASSERT_EQ(std::min(client_->max_version(),
+                       server_->max_version()),
+              client_->version());
+
     ASSERT_EQ(TlsAgent::CONNECTED, client_->state());
     ASSERT_EQ(TlsAgent::CONNECTED, server_->state());
 
@@ -550,7 +576,8 @@ class TlsConnectTestBase : public ::testing::Test {
     ASSERT_TRUE(ret);
     ASSERT_EQ(cipher_suite1, cipher_suite2);
 
-    std::cerr << "Connected with cipher suite " << client_->cipher_suite_name()
+    std::cerr << "Connected with version " << client_->version()
+              << " cipher suite " << client_->cipher_suite_name()
               << std::endl;
 
     // Check and store session ids.
@@ -639,6 +666,21 @@ class TlsConnectGeneric : public TlsConnectTestBase,
     std::cerr << "Variant: " << GetParam() << std::endl;
   }
 };
+
+class TlsConnectGenericSingleVersion : public TlsConnectTestBase,
+                                       public ::testing::WithParamInterface<
+  std::tuple<std::string,uint16_t>> {
+ public:
+  TlsConnectGenericSingleVersion() : TlsConnectTestBase(
+      std::get<0>(GetParam()) == "TLS" ? STREAM : DGRAM) {
+    uint16_t version = std::get<1>(GetParam());
+
+    std::cerr << "Version : " << version << std::endl;
+    client_->SetVersionRange(version, version);
+    server_->SetVersionRange(version, version);
+  }
+};
+
 
 TEST_P(TlsConnectGeneric, SetupOnly) {}
 
@@ -833,30 +875,6 @@ TEST_P(TlsConnectGeneric, ConnectNormalResumeWithExtendedMasterSecret) {
   CheckResumption(RESUME_NONE);
 }
 
-
-TEST_P(TlsConnectGeneric, ConnectTLS_1_1_Only) {
-  EnsureTlsSetup();
-  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
-                           SSL_LIBRARY_VERSION_TLS_1_1);
-
-  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
-                           SSL_LIBRARY_VERSION_TLS_1_1);
-
-  Connect();
-
-  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_1);
-}
-
-TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only) {
-  EnsureTlsSetup();
-  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                           SSL_LIBRARY_VERSION_TLS_1_2);
-  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                           SSL_LIBRARY_VERSION_TLS_1_2);
-  Connect();
-  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
-}
-
 TEST_F(TlsConnectTest, ConnectECDHE) {
   EnableSomeECDHECiphers();
   Connect();
@@ -926,7 +944,23 @@ TEST_F(TlsConnectTest, ConnectECDHETwiceNewKey) {
                         dhe1.public_key_.len())));
 }
 
-INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
-                        ::testing::Values("TLS", "DTLS"));
+TEST_P(TlsConnectGenericSingleVersion, Connect) {
+  Connect();
+}
 
+static const std::string kTls[] = {"TLS"};
+static const std::string kTlsDtls[] = {"TLS", "DTLS"};
+
+INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
+                        ::testing::ValuesIn(kTlsDtls));
+INSTANTIATE_TEST_CASE_P(VersionsStream, TlsConnectGenericSingleVersion,
+                        ::testing::Combine(
+                             ::testing::ValuesIn(kTls),
+                             ::testing::Values(SSL_LIBRARY_VERSION_3_0,
+                                               SSL_LIBRARY_VERSION_TLS_1_0)));
+INSTANTIATE_TEST_CASE_P(VersionsByVariants, TlsConnectGenericSingleVersion,
+                        ::testing::Combine(
+                             ::testing::ValuesIn(kTlsDtls),
+                             ::testing::Values(SSL_LIBRARY_VERSION_TLS_1_1,
+                                               SSL_LIBRARY_VERSION_TLS_1_2)));
 }  // namespace nspr_test
