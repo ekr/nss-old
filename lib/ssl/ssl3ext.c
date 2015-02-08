@@ -511,8 +511,6 @@ ssl3_SendSessionTicketXtn(
     if (!ss->opt.enableSessionTickets)
         return 0;
 
-    fprintf(stderr, "EKR: Sending session ticket extension server=%d\n", ss->sec.isServer);
-
     /* Empty extension length = extension_type (2-bytes) +
      * length(extension_data) (2-bytes)
      */
@@ -1801,7 +1799,6 @@ no_ticket:
         ssl3stats = SSL_GetStatistics();
         SSL_AtomicIncrementLong(& ssl3stats->hch_sid_ticket_parse_failures );
     }
-    fprintf(stderr, "EKR: Session ticket parsed\n");
     rv = SECSuccess;
 
 loser:
@@ -2591,6 +2588,10 @@ static SECStatus
 ssl3_HandleExtendedMasterSecretXtn(sslSocket * ss, PRUint16 ex_type,
                                 SECItem *data)
 {
+    if (ss->version < SSL_LIBRARY_VERSION_TLS_1_0) {
+        return 0;
+    }
+
     if (!ss->opt.enableExtendedMS) {
         return 0;
     }
