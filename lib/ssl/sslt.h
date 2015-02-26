@@ -123,7 +123,7 @@ typedef struct SSLChannelInfoStr {
     const char *         compressionMethodName;
     SSLCompressionMethod compressionMethod;
 
-    /* The following fields are added in NSS TODO */
+    /* The following fields are added in NSS XXX */
     PRBool               extendedMasterSecretUsed;
 } SSLChannelInfo;
 

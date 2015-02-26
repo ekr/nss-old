@@ -87,9 +87,9 @@ static PRInt32 ssl3_ClientSendDraftVersionXtn(sslSocket *ss, PRBool append,
 static SECStatus ssl3_ServerHandleDraftVersionXtn(sslSocket *ss, PRUint16 ex_type,
                                                   SECItem *data);
 static PRInt32 ssl3_SendExtendedMasterSecretXtn(sslSocket *ss, PRBool append,
-                                       PRUint32 maxBytes);
+                                                PRUint32 maxBytes);
 static SECStatus ssl3_HandleExtendedMasterSecretXtn(sslSocket *ss, PRUint16 ex_type,
-                                           SECItem *data);
+                                                    SECItem *data);
 
 
 /*
@@ -2599,7 +2599,8 @@ ssl3_HandleExtendedMasterSecretXtn(sslSocket * ss, PRUint16 ex_type,
     if (data->len != 0) {
         SSL_TRC(30, ("%d: SSL3[%d]: Bogus extended master secret extension",
                      SSL_GETPID(), ss->fd));
-        return SECSuccess;  /* TODO(ekr@rtfm.com): should this be SECFailure? */
+        return SECSuccess;  /* TODO(ekr@rtfm.com): Change to SECFailure when
+                               bug 753136? */
     }
 
     SSL_DBG(("%d: SSL[%d]: Negotiated extended master secret extension.",

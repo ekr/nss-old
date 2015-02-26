@@ -3604,7 +3604,7 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
         SECStatus hrv = ssl3_ComputeHandshakeHashes(ss, pwSpec, &hashes, 0);
         PORT_Assert(hrv == SECSuccess);  /* Should never fail. */
         if (hrv != SECSuccess) {
-            /* Go through the normal setup but then generate the random
+            /* Go through the normal setup but then generate a random
                PMS so we get a failure. */
             isExtendedMS = PR_FALSE;
             failedHandshakeHashes = PR_TRUE;
@@ -6496,6 +6496,8 @@ ssl3_HandleServerHello(sslSocket *ss, SSL3Opaque *b, PRUint32 length)
 
 	SECItem       wrappedMS;   /* wrapped master secret. */
 
+        /* You can't resume a session that used extended master secret
+           without using the extended master secret extension. */
         if (sid->u.ssl3.extendedMasterSecretUsed &&
             !ssl3_ExtensionNegotiated(ss, ssl_extended_master_secret_xtn)) {
             errCode = SSL_ERROR_RESUMPTION_WITHOUT_EXTENDED_MASTER_SECRET;
