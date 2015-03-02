@@ -4599,6 +4599,7 @@ ssl3_ComputeHandshakeHashes(sslSocket *     ss,
 	SHA1_Clone(shacx, (SHA1Context *)ss->ssl3.hs.sha_cx);
 
 	if (!isTLS) {
+            // TODO(ekr@rtfm.com): Double-check caller.
             if (!spec->msItem.data) {
                 PORT_SetError(SSL_ERROR_RX_UNEXPECTED_HANDSHAKE);
                 return SECFailure;
