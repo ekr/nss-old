@@ -3675,11 +3675,6 @@ ssl3_DeriveMasterSecret(sslSocket *ss, PK11SymKey *pms)
     }
 
     if (pms != NULL) {
-        /* Must be 0 or we are leaking below.
-           TODO(ekr@rtfm.com): Verify this. Set to 0?
-         */
-        PORT_Assert(!pwSpec->master_secret);
-
         if (!failedHandshakeHashes) {
 #if defined(TRACE)
             if (ssl_trace >= 100) {
@@ -4599,7 +4594,6 @@ ssl3_ComputeHandshakeHashes(sslSocket *     ss,
 	SHA1_Clone(shacx, (SHA1Context *)ss->ssl3.hs.sha_cx);
 
 	if (!isTLS) {
-            // TODO(ekr@rtfm.com): Double-check caller.
             if (!spec->msItem.data) {
                 PORT_SetError(SSL_ERROR_RX_UNEXPECTED_HANDSHAKE);
                 return SECFailure;
