@@ -153,29 +153,6 @@ TEST_P(TlsConnectGeneric, ConnectClientNoneServerBoth) {
   CheckResumption(RESUME_NONE);
 }
 
-TEST_P(TlsConnectGeneric, ConnectTLS_1_1_Only) {
-  EnsureTlsSetup();
-  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
-                           SSL_LIBRARY_VERSION_TLS_1_1);
-
-  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_1,
-                           SSL_LIBRARY_VERSION_TLS_1_1);
-
-  Connect();
-
-  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_1);
-}
-
-TEST_P(TlsConnectGeneric, ConnectTLS_1_2_Only) {
-  EnsureTlsSetup();
-  client_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                           SSL_LIBRARY_VERSION_TLS_1_2);
-  server_->SetVersionRange(SSL_LIBRARY_VERSION_TLS_1_2,
-                           SSL_LIBRARY_VERSION_TLS_1_2);
-  Connect();
-  client_->CheckVersion(SSL_LIBRARY_VERSION_TLS_1_2);
-}
-
 TEST_P(TlsConnectGeneric, ConnectAlpn) {
   EnableAlpn();
   Connect();
@@ -258,7 +235,109 @@ TEST_F(TlsConnectTest, ConnectECDHETwiceNewKey) {
                         dhe1.public_key_.len())));
 }
 
+TEST_P(TlsConnectGenericSingleVersion, Connect) {
+  Connect();
+}
+
+TEST_P(TlsConnectGenericSingleVersion, ConnectExtendedMasterSecret) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_SESSIONID);
+}
+
+TEST_P(TlsConnectGenericSingleVersion, ConnectExtendedMasterSecretECDHE) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  EnableSomeECDHECiphers();
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  EnableSomeECDHECiphers();
+  Connect();
+  CheckResumption(RESUME_SESSIONID);
+}
+
+TEST_P(TlsConnectGenericSingleVersion, ConnectExtendedMasterSecretTicket) {
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_TICKET);
+}
+
+TEST_P(TlsConnectGenericSingleVersion,
+       ConnectExtendedMasterSecretClientOnly) {
+  client_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(false);
+  Connect();
+}
+
+TEST_P(TlsConnectGenericSingleVersion,
+       ConnectExtendedMasterSecretServerOnly) {
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(false);
+  Connect();
+}
+
+TEST_P(TlsConnectGenericSingleVersion,
+       ConnectExtendedMasterSecretResumeWithout) {
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+
+  Reset();
+  server_->EnableExtendedMasterSecret();
+  ConnectExpectFail();
+}
+
+TEST_P(TlsConnectGenericSingleVersion,
+       ConnectNormalResumeWithExtendedMasterSecret) {
+  ExpectExtendedMasterSecret(false);
+  Connect();
+
+  Reset();
+  client_->EnableExtendedMasterSecret();
+  server_->EnableExtendedMasterSecret();
+  ExpectExtendedMasterSecret(true);
+  Connect();
+  CheckResumption(RESUME_NONE);
+}
+
+static const std::string kTls[] = {"TLS"};
+static const std::string kTlsDtls[] = {"TLS", "DTLS"};
+static const uint16_t kTlsV10[] = {SSL_LIBRARY_VERSION_TLS_1_0};
+
 INSTANTIATE_TEST_CASE_P(Variants, TlsConnectGeneric,
-                        ::testing::Values("TLS", "DTLS"));
+                        ::testing::ValuesIn(kTlsDtls));
+INSTANTIATE_TEST_CASE_P(VersionsStream, TlsConnectGenericSingleVersion,
+                        ::testing::Combine(
+                             ::testing::ValuesIn(kTls),
+                             ::testing::ValuesIn(kTlsV10)));
+INSTANTIATE_TEST_CASE_P(VersionsByVariants, TlsConnectGenericSingleVersion,
+                        ::testing::Combine(
+                             ::testing::ValuesIn(kTlsDtls),
+                             ::testing::Values(SSL_LIBRARY_VERSION_TLS_1_1,
+                                               SSL_LIBRARY_VERSION_TLS_1_2)));
 
 }  // namespace nspr_test

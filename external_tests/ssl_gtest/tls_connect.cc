@@ -106,7 +106,8 @@ void TlsConnectTestBase::Connect() {
   ASSERT_EQ(cipher_suite1, cipher_suite2);
 
   std::cerr << "Connected with version " << client_->version()
-            << " cipher suite " << client_->cipher_suite_name();
+            << " cipher suite " << client_->cipher_suite_name()
+            << std::endl;
 
   // Check and store session ids.
   std::vector<uint8_t> sid_c1 = client_->session_id();

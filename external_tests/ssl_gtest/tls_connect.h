@@ -69,6 +69,23 @@ class TlsConnectGeneric : public TlsConnectTestBase,
   TlsConnectGeneric();
 };
 
+// A generic test class that is a single version of TLS.   This is configured
+// in ssl_loopback_unittest.cc.  All uses of this should use TEST_P().
+class TlsConnectGenericSingleVersion : public TlsConnectTestBase,
+                                       public ::testing::WithParamInterface<
+std::tuple<std::string,uint16_t>> {
+public:
+ TlsConnectGenericSingleVersion() : TlsConnectTestBase(
+     std::get<0>(GetParam()) == "TLS" ? STREAM : DGRAM) {
+   uint16_t version = std::get<1>(GetParam());
+
+   std::cerr << "Version : " << version << std::endl;
+   client_->SetVersionRange(version, version);
+   server_->SetVersionRange(version, version);
+   version_ = version;
+ }
+};
+
 } // namespace nss_test
 
 #endif
