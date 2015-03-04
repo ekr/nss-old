@@ -17,7 +17,10 @@ namespace nss_test {
 TlsConnectTestBase::TlsConnectTestBase(Mode mode)
       : mode_(mode),
         client_(new TlsAgent("client", TlsAgent::CLIENT, mode_)),
-        server_(new TlsAgent("server", TlsAgent::SERVER, mode_)) {}
+        server_(new TlsAgent("server", TlsAgent::SERVER, mode_)),
+        version_(0),
+        session_ids_(),
+        expect_extended_master_secret_(false) {}
 
 TlsConnectTestBase::~TlsConnectTestBase() {
   delete client_;
@@ -58,6 +61,11 @@ void TlsConnectTestBase::Reset() {
   client_ = new TlsAgent("client", TlsAgent::CLIENT, mode_);
   server_ = new TlsAgent("server", TlsAgent::SERVER, mode_);
 
+  if (version_) {
+    client_->SetVersionRange(version_, version_);
+    server_->SetVersionRange(version_, version_);
+  }
+
   Init();
 }
 
@@ -72,13 +80,20 @@ void TlsConnectTestBase::Handshake() {
   client_->Handshake();
   server_->Handshake();
 
-  ASSERT_TRUE_WAIT(client_->state() != TlsAgent::CONNECTING &&
-                   server_->state() != TlsAgent::CONNECTING,
+  ASSERT_TRUE_WAIT((client_->state() != TlsAgent::CONNECTING) &&
+                   (server_->state() != TlsAgent::CONNECTING),
                    5000);
+
 }
 
 void TlsConnectTestBase::Connect() {
   Handshake();
+
+  // Check the version is as expected
+  ASSERT_EQ(client_->version(), server_->version());
+  ASSERT_EQ(std::min(client_->max_version(),
+                     server_->max_version()),
+            client_->version());
 
   ASSERT_EQ(TlsAgent::CONNECTED, client_->state());
   ASSERT_EQ(TlsAgent::CONNECTED, server_->state());
@@ -90,8 +105,8 @@ void TlsConnectTestBase::Connect() {
   ASSERT_TRUE(ret);
   ASSERT_EQ(cipher_suite1, cipher_suite2);
 
-  std::cerr << "Connected with cipher suite " << client_->cipher_suite_name()
-            << std::endl;
+  std::cerr << "Connected with version " << client_->version()
+            << " cipher suite " << client_->cipher_suite_name();
 
   // Check and store session ids.
   std::vector<uint8_t> sid_c1 = client_->session_id();
@@ -100,6 +115,9 @@ void TlsConnectTestBase::Connect() {
   ASSERT_EQ(32, sid_s1.size());
   ASSERT_EQ(sid_c1, sid_s1);
   session_ids_.push_back(sid_c1);
+
+  // Check whether the extended master secret extension was negotiated.
+  CheckExtendedMasterSecret();
 }
 
 void TlsConnectTestBase::ConnectExpectFail() {
@@ -160,6 +178,15 @@ void TlsConnectTestBase::EnableSrtp() {
 void TlsConnectTestBase::CheckSrtp() {
   client_->CheckSrtp();
   server_->CheckSrtp();
+}
+
+void TlsConnectTestBase::ExpectExtendedMasterSecret(bool expected) {
+    expect_extended_master_secret_ = expected;
+  }
+
+void TlsConnectTestBase::CheckExtendedMasterSecret() {
+  client_->CheckExtendedMasterSecret(expect_extended_master_secret_);
+  server_->CheckExtendedMasterSecret(expect_extended_master_secret_);
 }
 
 TlsConnectGeneric::TlsConnectGeneric()

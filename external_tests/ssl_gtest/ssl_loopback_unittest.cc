@@ -8,6 +8,7 @@
 #include "sslproto.h"
 
 #include <memory>
+#include <tuple>
 
 #include "tls_parser.h"
 #include "tls_filter.h"

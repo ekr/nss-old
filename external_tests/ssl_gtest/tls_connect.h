@@ -38,12 +38,17 @@ class TlsConnectTestBase : public ::testing::Test {
   void EnableAlpn();
   void EnableSrtp();
   void CheckSrtp();
+  void ExpectExtendedMasterSecret(bool expected);
 
  protected:
+  void CheckExtendedMasterSecret();
+
   Mode mode_;
   TlsAgent* client_;
   TlsAgent* server_;
+  uint16_t version_;
   std::vector<std::vector<uint8_t>> session_ids_;
+  bool expect_extended_master_secret_;
 };
 
 class TlsConnectTest : public TlsConnectTestBase {
